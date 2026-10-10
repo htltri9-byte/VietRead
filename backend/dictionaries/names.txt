@@ -1,0 +1,4 @@
+# Ten rieng (nhan vat, dia danh, mon phai...) — uu tiem CAO NHAT khi dich offline.
+# Dinh dang: 中文=Tên Riêng  (mỗi từ viết hoa chữ đầu)
+# Ví dụ (bỏ ký tự # ở đầu dòng để dùng):
+# # 武当=Wu Dang
