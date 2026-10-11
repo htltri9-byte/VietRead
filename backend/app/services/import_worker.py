@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 
@@ -28,6 +29,11 @@ from .scraper import AdapterError, ParsedStory, get_adapter, host_of
 from .translator import translate_text
 
 logger = logging.getLogger("vietread.imports")
+
+# Tiêu đề chương kiểu "第1章 积土成山" — bỏ tiền tố đánh số vì app tự hiển thị "Chương N: "
+_CHAPTER_PREFIX = re.compile(
+    r"^\s*第\s*[0-9０-９零一二三四五六七八九十百千两兩]+\s*[章节回卷篇话序]\s*[:：]?\s*"
+)
 
 
 def _utc_now() -> datetime:
@@ -143,7 +149,9 @@ def run_import_job(job_id: int) -> None:
                 job.target_lang,
                 on_progress=_on_paragraph,
             )
-            title_vi = translate_text(parsed_chapter.title, job.target_lang).strip()
+            # Bỏ "第N章" ở đầu tiêu đề (còn giữ nguyên nếu bỏ hết sẽ thành rỗng)
+            title_zh = _CHAPTER_PREFIX.sub("", parsed_chapter.title).strip() or parsed_chapter.title
+            title_vi = translate_text(title_zh, job.target_lang).strip()
             db.add(
                 Chapter(
                     story_id=story.id,

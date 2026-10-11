@@ -169,7 +169,9 @@ Ngoài ra có thể test trực tiếp trên http://127.0.0.1:8000/docs (nhấn 
   thời điểm hồi quota), `import_worker.py` (Pending → Running → Done/Failed,
   truyện nhập là nháp IsDraft=1). Cấu hình trong `.env`: `TRANSLATE_MODE`
   (`dict` mặc định = dịch offline bằng từ điển `app/vietphrase.py` +
-  `dictionaries/`, không cần mạng/key; `online` / `auto` = API dịch như cũ),
+  `dictionaries/` — kèm `vietphrase.txt` 679k cụm từ, `luatnhan.txt` 7.024
+  mẫu `{0}` (Luật Nhân), `surnames.txt` 400 họ — không cần mạng/key; tiêu đề
+  chương nhập tự bỏ tiền tố `第N章` `online` / `auto` = API dịch như cũ),
   `TRANSLATE_API_KEY` (tuỳ chọn), `TRANSLATE_EMAIL` (tăng quota MyMemory, tuỳ chọn),
   `IMPORT_CHAPTER_DELAY`, `IMPORT_MAX_CHAPTERS` (xem `.env.example`).
   Thêm tên riêng cho từ điển khi đang chạy: `POST /dictionary/names {"zh","vi"}`
