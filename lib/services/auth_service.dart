@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -20,7 +21,11 @@ class AuthSession {
 /// Mở app gọi [restore] một lần để tự đăng nhập lại bằng token đã lưu;
 /// giao diện nghe qua [instance] (ChangeNotifier) để tự dựng lại khi đổi phiên.
 class AuthService extends ChangeNotifier {
-  AuthService._({ApiService? api}) : _api = api ?? ApiService();
+  AuthService._({ApiService? api}) : _api = api ?? ApiService() {
+    // Request thật trả 401 (token hết hạn / sai khoá ký) → tự đăng xuất để
+    // UI chuyển về màn đăng nhập, không kẹt phiên chết giữa phiên chạy.
+    HttpApiService.onUnauthorized = _handleUnauthorized;
+  }
 
   /// Phiên duy nhất của app (cùng kiểu với `PrefsService.instance`).
   static AuthService instance = AuthService._();
@@ -101,6 +106,17 @@ class AuthService extends ChangeNotifier {
   Future<void> logout() async {
     _api.setToken(null);
     await _clear();
+  }
+
+  /// Backend từ chối token (401) trong lúc đang đăng nhập → xoá phiên ngay.
+  ///
+  /// Gọi bởi `HttpApiService.onUnauthorized`: request tới `/auth/login`/
+  /// `/auth/register` không kích hoạt (401 ở đó là sai mật khẩu), và khi
+  /// chưa đăng nhập thì làm gì cũng vô hại.
+  void _handleUnauthorized() {
+    if (_session == null) return;
+    _api.setToken(null);
+    unawaited(_clear());
   }
 
   /// Lưu phiên vào bộ nhớ rồi báo UI dựng lại.

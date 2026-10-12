@@ -8,6 +8,7 @@ import '../widgets/empty_state.dart';
 import '../widgets/error_state.dart';
 import '../widgets/skeleton.dart';
 import 'chapter_form_screen.dart';
+import 'chapter_import_sheet.dart';
 import 'story_form_screen.dart';
 
 /// Quản lý chương của một truyện — A3.9 (Bước 9).
@@ -98,6 +99,20 @@ class _ChapterManagerScreenState extends State<ChapterManagerScreen> {
     if (mounted) _load();
   }
 
+  /// Thêm chương từ link Qidian / dán văn bản (bottom sheet) —
+  /// thành công thì nạp lại danh sách + báo SnackBar.
+  Future<void> _importChapter() async {
+    final bool? added = await showChapterImportSheet(
+      context,
+      api: _api,
+      storyId: _story.id,
+    );
+    if (added == true && mounted) {
+      _load();
+      _showMessage('Đã thêm chương mới.');
+    }
+  }
+
   /// Sửa chương → quay về nạp lại.
   Future<void> _editChapter(ChapterSummary chapter) async {
     await Navigator.of(context).push<bool>(
@@ -173,10 +188,26 @@ class _ChapterManagerScreenState extends State<ChapterManagerScreen> {
       ),
       floatingActionButton: _loading || _error != null
           ? null
-          : FloatingActionButton.extended(
-              onPressed: _addChapter,
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('Chương mới'),
+          : Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  FloatingActionButton.small(
+                    heroTag: 'importChapterFromLink',
+                    onPressed: _importChapter,
+                    tooltip: 'Thêm chương từ link',
+                    child: const Icon(Icons.add_link_rounded),
+                  ),
+                  const SizedBox(width: 12),
+                  FloatingActionButton.extended(
+                    heroTag: 'newChapter',
+                    onPressed: _addChapter,
+                    icon: const Icon(Icons.add_rounded),
+                    label: const Text('Chương mới'),
+                  ),
+                ],
+              ),
             ),
       body: _loading
           ? const ListSkeleton(rows: 6)

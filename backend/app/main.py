@@ -13,6 +13,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import database
 from .routers import (
     auth,
+    chapter_import,
     chapters,
     comments,
     dictionary,
@@ -69,6 +70,7 @@ def validation_error_handler(
 app.include_router(auth.router)
 app.include_router(stories.router)
 app.include_router(chapters.router)
+app.include_router(chapter_import.router)
 app.include_router(genres.router)
 app.include_router(follows.router)
 app.include_router(comments.router)

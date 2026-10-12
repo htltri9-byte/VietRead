@@ -38,6 +38,17 @@ sqlcmd -S localhost -E -C -b -f 65001 -i database/seed.sql
 - `-f 65001` = đọc file UTF-8 (tiếng Việt trong seed).
 - `seed.sql` chạy lại được: nếu đã có dữ liệu mẫu thì nó tự bỏ qua.
 
+**Migration DB đã tồn tại (thêm cột theo dõi nguồn — idempotent, chạy lại an toàn):**
+
+```bash
+sqlcmd -S localhost -E -C -b -f 65001 -i database/migrate_source_tracking.sql
+```
+
+Thêm `Stories.SourceBookId`, `Chapters.SourceChapterId`, `Chapters.SourceChapterUrl`
++ unique index lọc `(StoryId, SourceChapterId) WHERE SourceChapterId IS NOT NULL`
+(chống trùng chương khi thêm chương từ link Qidian). Dữ liệu cũ giữ nguyên
+(cột mới đều NULL); DB tạo mới từ `schema.sql` đã có sẵn các cột này.
+
 Làm lại từ đầu (chỉ khi chắc chắn, sẽ xoá toàn bộ dữ liệu):
 
 ```bash
@@ -154,6 +165,8 @@ Ngoài ra có thể test trực tiếp trên http://127.0.0.1:8000/docs (nhấn 
 | DELETE | `/chapters/{id}` | – | chỉ tác giả; tự xoá bình luận của chương đó |
 | POST | `/imports` | `{ sourceUrl, targetLang? }` | cần token → `{ jobId, status, ... }`; chạy nền bằng `BackgroundTasks` (Bước 10) |
 | GET | `/imports/{jobId}` | – | `{ status, progress, storyId?, error? }` — Pending/Running/Done/Failed + % chương; chỉ chủ job (khác → 404) |
+| POST | `/stories/{id}/chapters/import` | `{ chapterUrl, chapterNo?, title? }` | **chỉ Qidian** + chỉ tác giả; cào 1 chương → dịch → trả `Chapter`; chạy đồng bộ trong request (~2s) |
+| POST | `/stories/{id}/chapters/import-text` | `{ text, sourceLang: zh\|vi, chapterNo?, title? }` | dán văn bản; `vi` lưu nguyên, `zh` dịch rồi lưu bản gốc; text ≤ 100.000 ký tự |
 
 - `status`: `ongoing` (đang ra) \| `completed` (hoàn thành) — sai → 400.
 - `sort`: `newest` (mới, mặc định) \| `hot` (nhiều theo dõi) \| `rating` (điểm) \| `title` — sai → 400. Nhận cả `mới`, `điểm`.
@@ -181,6 +194,20 @@ Ngoài ra có thể test trực tiếp trên http://127.0.0.1:8000/docs (nhấn 
   font anti-scrape (ký tự PUA) → Failed "chưa giải mã được"; **Faloo** ⚠️ — trang
   chương yêu cầu đăng nhập → Failed "cần đăng nhập"; `demo.vietread.local` ✅ —
   fixture không cần mạng (dùng cho test/demo).
+- **Thêm chương vào truyện đã có** (`app/routers/chapter_import.py`): chỉ chủ
+  truyện (không tồn tại → 404, khác chủ → 403); link phải thuộc `qidian.com`
+  (khác → 400 "Chỉ hỗ trợ thêm chương từ Qidian") và đúng định dạng chương
+  `/chapter/{bookId}/{chapterId}/` (đã kiểm chứng thực tế trên `m.qidian.com`);
+  tách `bookId`/`chapterId` để:
+  - **chống nhầm truyện**: truyện đã có `SourceBookId` mà link khác bookId →
+    400 "Link này thuộc truyện khác"; truyện chưa có thì ghi lại từ link;
+  - **chống trùng**: `SourceChapterId` đã có trong truyện → 409 "Chương này đã
+    được nhập (chương số N)" (unique index lọc ở DB chặn đồng thời);
+  - **số chương**: `chapterNo` gửi lên → đọc `第N章` từ tiêu đề gốc → `MAX+1`;
+    trùng số → 409. Chỉ THÊM, không sửa chương cũ; cập nhật `Stories.UpdatedAt`.
+  - Lỗi phân biệt rõ: sai định dạng/domain/link truyện khác/VIP → 400; Qidian chặn
+    hoặc cào rỗng → 502 (kèm HTTP status); hết quota/dịch lỗi → 503;
+    traceback được log ra terminal uvicorn.
 
 Ví dụ:
 
@@ -198,7 +225,7 @@ curl -s -X POST http://127.0.0.1:8000/stories \
   -d '{"title":"Truyện Của Tôi","status":"ongoing","genres":["Đô Thị"]}'
 ```
 
-### Test tự động (chạy hết Bước 1 + Bước 2 + `GET /me/stories` (Bước 9) + `/imports` (Bước 10))
+### Test tự động (chạy hết Bước 1 + Bước 2 + `GET /me/stories` (Bước 9) + `/imports` (Bước 10) + thêm chương (A3.11))
 
 ```bash
 cd backend
@@ -206,10 +233,11 @@ cd backend
 .venv/bin/python test_api.py                # Linux/macOS
 ```
 
-Chạy xong in `TẤT CẢ 116 KIỂM TRA ĐỀU PASS` (exit code 0); script tự tạo và tự xoá dữ liệu kiểm thử.
+Chạy xong in `TẤT CẢ 145 KIỂM TRA ĐỀU PASS` (exit code 0); script tự tạo và tự xoá dữ liệu kiểm thử.
 
-> Trong đó check import bản demo (`job → Done`) cần có mạng để gọi API dịch;
-> các check còn lại chạy được offline.
+> Trong đó check import bản demo (`job → Done`) và check thêm chương bằng link
+> Qidian thật cần có mạng (cào nguồn); các check còn lại chạy được offline
+> (dịch dùng `TRANSLATE_MODE=dict` mặc định).
 
 > Windows: nếu chạy qua pipe (`| tail`) mà bị `UnicodeEncodeError` (cp1252), thêm
 > `PYTHONUTF8=1` phía trước lệnh python.

@@ -25,7 +25,14 @@ from sqlalchemy import select
 
 from ..database import SessionLocal
 from ..models import Chapter, Genre, ImportJob, Story, StoryGenre
-from .scraper import AdapterError, ParsedStory, get_adapter, host_of
+from .scraper import (
+    AdapterError,
+    ParsedStory,
+    get_adapter,
+    host_of,
+    qidian_book_id,
+    qidian_chapter_id,
+)
 from .translator import translate_text
 
 logger = logging.getLogger("vietread.imports")
@@ -118,6 +125,9 @@ def run_import_job(job_id: int) -> None:
             status="ongoing",
             is_draft=True,
             source_url=job.source_url,
+            # bookId từ URL truyện (Qidian) — NULL với nguồn khác / URL lạ;
+            # dùng để chống nhầm truyện khi thêm chương bằng link về sau.
+            source_book_id=qidian_book_id(job.source_url),
         )
         db.add(story)
         db.flush()
@@ -152,6 +162,9 @@ def run_import_job(job_id: int) -> None:
             # Bỏ "第N章" ở đầu tiêu đề (còn giữ nguyên nếu bỏ hết sẽ thành rỗng)
             title_zh = _CHAPTER_PREFIX.sub("", parsed_chapter.title).strip() or parsed_chapter.title
             title_vi = translate_text(title_zh, job.target_lang).strip()
+            # Mã chương + link nguồn (Qidian) để chống trùng khi thêm chương mới;
+            # nguồn khác / URL không khớp định dạng → để NULL (bỏ qua).
+            src_ids = qidian_chapter_id(chapter_url)
             db.add(
                 Chapter(
                     story_id=story.id,
@@ -159,6 +172,8 @@ def run_import_job(job_id: int) -> None:
                     title=title_vi[:255] or f"Chương {i}",
                     content=content_vi,
                     original_content=parsed_chapter.content,
+                    source_chapter_id=src_ids[1] if src_ids else None,
+                    source_chapter_url=chapter_url if src_ids else None,
                 )
             )
             job.progress = int(i / total * 100)

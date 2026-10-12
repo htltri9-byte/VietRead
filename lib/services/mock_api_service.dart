@@ -166,6 +166,8 @@ class MockApiService implements ApiService {
     _chaptersByStory = <int, List<Chapter>>{};
     _nextStoryId = 9;
     _nextChapterId = 5000000;
+    _sourceBookByStory = <int, String>{};
+    _sourceChaptersByStory = <int, Map<String, int>>{};
   }
 
   Story _toStory(_MockStory mock) => Story(
@@ -1089,6 +1091,202 @@ class MockApiService implements ApiService {
     }
     job.advance(); // mô phỏng worker chạy nền giữa 2 lần poll của app
     return job.toImportJob();
+  }
+
+  // ---------------- Thêm chương vào truyện đã có (link / dán văn bản) ------
+
+  /// SourceBookId / SourceChapterId giả lập — khớp cột DB của backend
+  /// (Stories.SourceBookId, Chapters.SourceChapterId).
+  static Map<int, String> _sourceBookByStory = <int, String>{};
+
+  /// storyId → (sourceChapterId → số chương) — để báo trùng 409 như backend.
+  static Map<int, Map<String, int>> _sourceChaptersByStory =
+      <int, Map<String, int>>{};
+
+  /// (bookId, chapterId) từ link chương Qidian — cùng regex với backend.
+  static final RegExp _qidianChapterRe = RegExp(r'/chapter/(\d+)/(\d+)');
+  static final RegExp _qidianLegacyRe = RegExp(r'/book/(\d+)/(\d+)\.html$');
+
+  static bool _isQidianHost(String host) =>
+      host == 'qidian.com' || host.endsWith('.qidian.com');
+
+  /// Số chương của các chương đang có (chưa materialize → sinh 1..chapterCount).
+  static Iterable<Chapter> _existingChapters(_MockStory mock) =>
+      _chaptersByStory[mock.id] ??
+      List<Chapter>.generate(mock.chapterCount, (int i) {
+        return Chapter(
+          id: chapterIdOf(mock.id, i + 1),
+          storyId: mock.id,
+          index: i + 1,
+          title: '',
+          content: '',
+        );
+      });
+
+  /// Số chương mới: chapterNo → MAX+1 (trống → 1); trùng → 409 như backend.
+  static int _nextIndexFor(_MockStory mock, int? chapterNo) {
+    if (chapterNo != null) {
+      if (chapterNo < 1) {
+        throw const ApiException(
+          'Số chương phải là số nguyên ≥ 1',
+          statusCode: 400,
+        );
+      }
+      if (_existingChapters(mock).any((Chapter c) => c.index == chapterNo)) {
+        throw ApiException(
+          'Chương số $chapterNo đã tồn tại trong truyện',
+          statusCode: 409,
+        );
+      }
+      return chapterNo;
+    }
+    final Iterable<Chapter> chapters = _existingChapters(mock);
+    if (chapters.isEmpty) return 1;
+    return chapters.map((Chapter c) => c.index).reduce(max) + 1;
+  }
+
+  /// Thêm chương vào danh sách materialize + cập nhật truyện (giống backend).
+  Chapter _appendChapter(
+    _MockStory mock,
+    int index,
+    String title,
+    String content,
+  ) {
+    final Chapter chapter = Chapter(
+      id: _nextChapterId++,
+      storyId: mock.id,
+      index: index,
+      title: title,
+      content: content,
+    );
+    _materializeChapters(mock).add(chapter);
+    mock.chapterCount = _chaptersByStory[mock.id]!.length;
+    mock.updatedAgo = Duration.zero;
+    return chapter;
+  }
+
+  @override
+  Future<Chapter> importChapterFromUrl(
+    int storyId, {
+    required String chapterUrl,
+    int? chapterNo,
+    String? title,
+  }) async {
+    await _wait();
+    final _MockStory mock = _storyOrThrow(storyId);
+    _requireOwner(mock);
+
+    final String url = chapterUrl.trim();
+    final Uri? uri = Uri.tryParse(url);
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty) {
+      throw const ApiException(
+        'Link không hợp lệ — cần link http(s) đầy đủ',
+        statusCode: 400,
+      );
+    }
+    if (!_isQidianHost(uri.host.toLowerCase())) {
+      throw const ApiException(
+        'Chỉ hỗ trợ thêm chương từ Qidian',
+        statusCode: 400,
+      );
+    }
+    // Giả lập lỗi nguồn: link có “vip” → chương trả phí (không vượt rào).
+    if (uri.path.contains('vip')) {
+      throw const ApiException(
+        'Nội dung chương này là trả phí (VIP) của Qidian — chỉ đọc được đoạn '
+        'mở đầu, cần đăng nhập/mua điểm để lấy trọn chương',
+        statusCode: 400,
+      );
+    }
+    final RegExpMatch? m =
+        _qidianChapterRe.firstMatch(uri.path) ??
+        _qidianLegacyRe.firstMatch(uri.path);
+    if (m == null) {
+      throw const ApiException(
+        'Link không đúng định dạng chương Qidian',
+        statusCode: 400,
+      );
+    }
+    final String bookId = m.group(1)!;
+    final String chapterId = m.group(2)!;
+
+    // Chống nhầm truyện.
+    final String? storyBook = _sourceBookByStory[storyId];
+    if (storyBook != null && storyBook != bookId) {
+      throw const ApiException('Link này thuộc truyện khác', statusCode: 400);
+    }
+    // Chống trùng chương.
+    final int? existingIndex = _sourceChaptersByStory[storyId]?[chapterId];
+    if (existingIndex != null) {
+      throw ApiException(
+        'Chương này đã được nhập (chương số $existingIndex)',
+        statusCode: 409,
+      );
+    }
+
+    final int index = _nextIndexFor(mock, chapterNo);
+    final Chapter chapter = _appendChapter(
+      mock,
+      index,
+      (title?.trim().isNotEmpty ?? false)
+          ? title!.trim()
+          : 'Chương $index',
+      'Nội dung đã cào và dịch từ Qidian (mô phỏng) — $url',
+    );
+    _sourceBookByStory[storyId] = bookId;
+    (_sourceChaptersByStory[storyId] ??= <String, int>{})[chapterId] = index;
+    return chapter;
+  }
+
+  @override
+  Future<Chapter> importChapterFromText(
+    int storyId, {
+    required String text,
+    required String sourceLang,
+    int? chapterNo,
+    String? title,
+  }) async {
+    await _wait();
+    final _MockStory mock = _storyOrThrow(storyId);
+    _requireOwner(mock);
+
+    if (text.trim().isEmpty) {
+      throw const ApiException(
+        'Nội dung chương không được để trống',
+        statusCode: 400,
+      );
+    }
+    if (text.length > 100000) {
+      throw const ApiException(
+        'Nội dung chương tối đa 100.000 ký tự',
+        statusCode: 400,
+      );
+    }
+    if (sourceLang != 'zh' && sourceLang != 'vi') {
+      throw const ApiException(
+        "sourceLang phải là 'zh' (Trung) hoặc 'vi' (Việt)",
+        statusCode: 400,
+      );
+    }
+
+    final String firstLine = text.split('\n').firstWhere(
+          (String l) => l.trim().isNotEmpty,
+          orElse: () => '',
+        ).trim();
+    final int index = _nextIndexFor(mock, chapterNo);
+    final String? cleanTitle = (title?.trim().isNotEmpty ?? false)
+        ? title!.trim()
+        : null;
+    final String chapterTitle = cleanTitle ??
+        (firstLine.length <= 120 && firstLine.isNotEmpty
+            ? firstLine
+            : 'Chương $index');
+    // sourceLang=vi: lưu nguyên; zh: “dịch” (mô phỏng) rồi giữ bản gốc.
+    final String content =
+        sourceLang == 'vi' ? text : 'Bản dịch (mô phỏng): $text';
+    return _appendChapter(mock, index, chapterTitle, content);
   }
 
   /// Nội dung chương mẫu (đủ dấu tiếng Việt) cho bản mock.

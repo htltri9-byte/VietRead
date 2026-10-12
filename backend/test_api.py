@@ -430,6 +430,140 @@ check("job của người khác với bản demo → 404",
 r = client.delete(f"/stories/{demo_sid}", headers=auth(tac_gia))
 check("xoá truyện nhập sau kiểm thử", r.status_code == 200, r.text)
 
+print("\n=== THÊM CHƯƠNG VÀO TRUYỆN ĐÃ CÓ — /chapters/import + /import-text ===")
+# Truyện mới tinh để kiểm thử riêng (không đụng truyện seed).
+r = client.post("/stories", json={"title": "Truyện Kiểm Thử B11 Thêm Chương"},
+                headers=auth(tac_gia))
+check("tạo truyện cho kiểm thử thêm chương", r.status_code == 200, r.text)
+imp_sid = r.json()["id"]
+
+FREE_QIDIAN = "https://www.qidian.com/chapter/1040765595/806596284/"  # 第1章 永夜 (miễn phí)
+
+r = client.post(f"/stories/{imp_sid}/chapters/import",
+                json={"chapterUrl": FREE_QIDIAN})
+check("chưa đăng nhập → 401 {message}",
+      r.status_code == 401 and "message" in r.json(), r.text)
+
+r = client.post("/stories/999999/chapters/import",
+                json={"chapterUrl": FREE_QIDIAN}, headers=auth(tac_gia))
+check("truyện không tồn tại → 404 {message}",
+      r.status_code == 404 and "message" in r.json(), r.text)
+
+r = client.post(f"/stories/{imp_sid}/chapters/import",
+                json={"chapterUrl": FREE_QIDIAN}, headers=auth(doc_gia))
+check("không phải chủ truyện → 403 {message}",
+      r.status_code == 403 and "message" in r.json(), r.text)
+
+r = client.post(f"/stories/{imp_sid}/chapters/import",
+                json={"chapterUrl": "https://example.com/chapter/1/2"},
+                headers=auth(tac_gia))
+check("domain không phải Qidian → 400",
+      r.status_code == 400 and "Chỉ hỗ trợ thêm chương từ Qidian" in r.json()["message"],
+      r.text)
+
+r = client.post(f"/stories/{imp_sid}/chapters/import",
+                json={"chapterUrl": "https://m.qidian.com/book/1040765595/"},
+                headers=auth(tac_gia))
+check("link Qidian nhưng không phải link chương → 400 kèm hướng dẫn",
+      r.status_code == 400 and "chương Qidian" in r.json()["message"], r.text)
+
+# Thêm thật chương miễn phí (cần mạng) — www.qidian (bị chặn bot) phải tự
+# rewrite sang m.qidian.com; Content = bản dịch, chương đánh số từ "第1章".
+r = client.post(f"/stories/{imp_sid}/chapters/import",
+                json={"chapterUrl": FREE_QIDIAN}, headers=auth(tac_gia))
+check("thêm chương Qidian bằng link = 200", r.status_code == 200, r.text)
+new_ch = r.json()
+check("phản hồi đúng format chương {id, storyId, index, title, content}",
+      {"id", "storyId", "index", "title", "content"} <= set(new_ch), str(new_ch))
+check("số chương đọc từ tiêu đề 第1章 → index 1", new_ch["index"] == 1, str(new_ch))
+check("content là bản dịch (khác bản gốc tiếng Trung)",
+      new_ch["content"] and "那一天太阳落下" not in new_ch["content"],
+      new_ch["content"][:80])
+
+r = client.get(f"/stories/{imp_sid}/chapters", headers=auth(tac_gia))
+check("danh sách chương sau thêm = 1", r.status_code == 200 and len(r.json()) == 1,
+      r.text)
+
+# Trùng chương: dán lại đúng chương đó (bản mobile — khác host, cùng chapterId)
+r = client.post(f"/stories/{imp_sid}/chapters/import",
+                json={"chapterUrl": "https://m.qidian.com/chapter/1040765595/806596284/"},
+                headers=auth(tac_gia))
+check("dán lại cùng chương → 409 'Chương này đã được nhập' + số chương",
+      r.status_code == 409 and "Chương này đã được nhập" in r.json()["message"]
+      and "1" in r.json()["message"], r.text)
+check("trùng chương không tạo bản ghi mới",
+      len(client.get(f"/stories/{imp_sid}/chapters", headers=auth(tac_gia)).json()) == 1)
+
+# Truyện đã có SourceBookId=1040765595 → link book khác bị chặn
+r = client.post(f"/stories/{imp_sid}/chapters/import",
+                json={"chapterUrl": "https://m.qidian.com/chapter/1035420986/806596284/"},
+                headers=auth(tac_gia))
+check("link thuộc truyện khác → 400 'Link này thuộc truyện khác'",
+      r.status_code == 400 and r.json()["message"] == "Link này thuộc truyện khác",
+      r.text)
+
+# Số chương trùng với chương đã có (client gửi chapterNo=1)
+r = client.post(f"/stories/{imp_sid}/chapters/import-text",
+                json={"text": "Nội dung Việt dán vào.", "sourceLang": "vi",
+                      "chapterNo": 1}, headers=auth(tac_gia))
+check("chapterNo trùng chương đã có → 409", r.status_code == 409, r.text)
+
+print("\n=== DÁN VĂN BẢN — POST /stories/{id}/chapters/import-text ===")
+r = client.post(f"/stories/{imp_sid}/chapters/import-text",
+                json={"text": "Đoạn văn bản tiếng Việt dán thẳng vào chương."})
+check("import-text chưa đăng nhập → 401", r.status_code == 401, r.text)
+
+r = client.post(f"/stories/{imp_sid}/chapters/import-text",
+                json={"text": "   ", "sourceLang": "vi"}, headers=auth(tac_gia))
+check("text rỗng → 400", r.status_code == 400 and "message" in r.json(), r.text)
+
+r = client.post(f"/stories/{imp_sid}/chapters/import-text",
+                json={"text": "abc", "sourceLang": "fr"}, headers=auth(tac_gia))
+check("sourceLang sai → 400", r.status_code == 400 and "message" in r.json(), r.text)
+
+r = client.post(f"/stories/{imp_sid}/chapters/import-text",
+                json={"text": "x" * 100001, "sourceLang": "vi"},
+                headers=auth(tac_gia))
+check("text quá 100.000 ký tự → 400", r.status_code == 400 and "message" in r.json(),
+      r.text)
+
+# sourceLang=vi: lưu nguyên, không dịch; không có chapterNo → MAX+1 = 2
+vi_text = "Chương mới dán bằng tiếng Việt — giữ nguyên 100% nội dung."
+r = client.post(f"/stories/{imp_sid}/chapters/import-text",
+                json={"text": vi_text, "sourceLang": "vi"}, headers=auth(tac_gia))
+check("import-text vi = 200", r.status_code == 200, r.text)
+text_ch = r.json()
+check("text vi lưu nguyên làm content", text_ch["content"] == vi_text, str(text_ch))
+check("tự đánh số MAX+1 → index 2", text_ch["index"] == 2, str(text_ch))
+
+# Ưu tiên chapterNo client gửi
+r = client.post(f"/stories/{imp_sid}/chapters/import-text",
+                json={"text": "Nội dung chương số 10.", "sourceLang": "vi",
+                      "chapterNo": 10, "title": "Tên do client đặt"},
+                headers=auth(tac_gia))
+check("chapterNo client gửi được ưu tiên → index 10",
+      r.status_code == 200 and r.json()["index"] == 10, r.text)
+check("title client gửi được dùng", r.json()["title"] == "Tên do client đặt", r.text)
+
+# sourceLang=zh: dịch Trung → Việt, lưu content là bản dịch (yêu cầu
+# "dán tiếng Trung → tự ra chương tiếng Việt")
+zh_text = "那一天太阳落下再也没有升起。"
+r = client.post(f"/stories/{imp_sid}/chapters/import-text",
+                json={"text": zh_text, "sourceLang": "zh"}, headers=auth(tac_gia))
+check("import-text zh = 200 (dịch Trung → Việt)", r.status_code == 200, r.text)
+zh_ch = r.json()
+check("zh: content là bản dịch, khác bản gốc tiếng Trung",
+      zh_ch["content"] and zh_ch["content"] != zh_text
+      and "那一天" not in zh_ch["content"], zh_ch["content"][:80])
+check("zh: số chương MAX+1 → index 11", zh_ch["index"] == 11, str(zh_ch))
+
+r = client.get(f"/stories/{imp_sid}", headers=auth(tac_gia))
+check("truyện có 4 chương sau khi thêm (1 link + 3 text)",
+      r.status_code == 200 and r.json()["chapterCount"] == 4, r.text)
+
+r = client.delete(f"/stories/{imp_sid}", headers=auth(tac_gia))
+check("dọn truyện kiểm thử thêm chương", r.status_code == 200, r.text)
+
 print("\n=== DỌN DẸP ===")
 r = client.delete(f"/stories/{draft_id}", headers=auth(tac_gia))
 check("xoá truyện nháp", r.status_code == 200, r.text)

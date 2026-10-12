@@ -310,3 +310,71 @@ class ImportJobOut(BaseModel):
     progress: int = Field(ge=0, le=100)
     story_id: int | None = Field(default=None, alias="storyId")
     error: str | None = None
+
+
+# ===========================================================================
+# Thêm chương vào truyện đã có — link Qidian / dán văn bản
+# ===========================================================================
+
+
+MAX_PASTED_TEXT = 100_000  # giới hạn ký tự cho dán văn bản (một chương thường ~5–10k)
+
+
+class _ChapterImportFields(BaseModel):
+    """Trường chung: số chương tuỳ chọn + tên chương tuỳ chọn."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    chapter_no: int | None = Field(default=None, alias="chapterNo", ge=1, le=1_000_000)
+    title: str | None = Field(default=None, max_length=255)
+
+    @field_validator("title")
+    @classmethod
+    def _empty_title_to_none(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None  # không gửi title / gửi rỗng đều = tự lấy từ nguồn
+
+
+class ChapterImportByUrl(_ChapterImportFields):
+    """POST /stories/{id}/chapters/import — { chapterUrl, chapterNo?, title? }."""
+
+    chapter_url: str = Field(alias="chapterUrl", min_length=10, max_length=1000)
+
+    @field_validator("chapter_url")
+    @classmethod
+    def _strip_url(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("chapterUrl không được để trống")
+        return value
+
+
+class ChapterImportByText(_ChapterImportFields):
+    """POST /stories/{id}/chapters/import-text
+
+    — { text, sourceLang: zh|vi, chapterNo?, title? }.
+    """
+
+    # Không đặt min/max_length ở Field để validator dưới báo lỗi tiếng Việt
+    # (ràng buộc của Pydantic in tiếng Anh).
+    text: str
+    source_lang: str = Field(default="zh", alias="sourceLang", max_length=10)
+
+    @field_validator("text")
+    @classmethod
+    def _check_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Nội dung chương không được để trống")
+        if len(value) > MAX_PASTED_TEXT:
+            raise ValueError(f"Nội dung chương tối đa {MAX_PASTED_TEXT:,} ký tự".replace(",", "."))
+        return value
+
+    @field_validator("source_lang")
+    @classmethod
+    def _check_lang(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in ("zh", "vi"):
+            raise ValueError("sourceLang phải là 'zh' (Trung) hoặc 'vi' (Việt)")
+        return value

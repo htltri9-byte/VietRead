@@ -165,10 +165,37 @@ abstract class ApiService {
 
   /// GET /imports/{jobId} — trạng thái job (Pending/Running/Done/Failed + %).
   Future<ImportJob> fetchImportJob(int jobId);
+
+  // ------------------------- Thêm chương vào truyện đã có ------------------
+
+  /// POST /stories/{id}/chapters/import — thêm chương từ link Qidian
+  /// (chỉ chủ truyện; backend cào + dịch đồng bộ trong request).
+  Future<Chapter> importChapterFromUrl(
+    int storyId, {
+    required String chapterUrl,
+    int? chapterNo,
+    String? title,
+  });
+
+  /// POST /stories/{id}/chapters/import-text — thêm chương bằng văn bản dán
+  /// (`sourceLang`: 'zh' = dịch Trung → Việt, 'vi' = lưu nguyên).
+  Future<Chapter> importChapterFromText(
+    int storyId, {
+    required String text,
+    required String sourceLang,
+    int? chapterNo,
+    String? title,
+  });
 }
 
 /// Gọi REST API thật của backend FastAPI.
 class HttpApiService implements ApiService {
+  /// Callback cấp **static** — mọi instance đều gọi khi request trả **401**
+  /// (token hết hạn / sai khoá ký / đã bị xoá). `AuthService` đăng ký để tự
+  /// xoá phiên ngay, UI chuyển về màn đăng nhập thay vì kẹt ở trạng thái
+  /// "đã đăng nhập" mà mọi request đều lỗi "Token không hợp lệ hoặc đã hết hạn".
+  static void Function()? onUnauthorized;
+
   HttpApiService({http.Client? client, String? baseUrl})
     : _client = client ?? http.Client(),
       _baseUrl = baseUrl ?? ApiConfig.baseUrl;
@@ -202,6 +229,7 @@ class HttpApiService implements ApiService {
     String path, {
     Map<String, String>? query,
     Map<String, dynamic>? payload,
+    Duration? timeout,
   }) async {
     final http.Response res;
     try {
@@ -210,7 +238,7 @@ class HttpApiService implements ApiService {
       if (payload != null) request.body = jsonEncode(payload);
       final http.StreamedResponse streamed = await _client
           .send(request)
-          .timeout(ApiConfig.requestTimeout);
+          .timeout(timeout ?? ApiConfig.requestTimeout);
       res = await http.Response.fromStream(streamed);
     } on TimeoutException {
       throw const ApiException('Máy chủ phản hồi quá chậm, vui lòng thử lại.');
@@ -223,6 +251,15 @@ class HttpApiService implements ApiService {
 
     // bodyBytes + utf8: backend trả JSON không ghi charset, tránh lỗi tiếng Việt
     final String body = utf8.decode(res.bodyBytes, allowMalformed: true);
+
+    // 401 khi đang gọi với token = phiên đã chết → báo cho AuthService tự
+    // đăng xuất. Bỏ qua /auth/login + /auth/register (401 = sai mật khẩu,
+    // không liên quan tới phiên hiện tại).
+    if (res.statusCode == 401 &&
+        path != '/auth/login' &&
+        path != '/auth/register') {
+      HttpApiService.onUnauthorized?.call();
+    }
 
     if (res.statusCode != 200) {
       String message = 'Đã xảy ra lỗi (${res.statusCode}), vui lòng thử lại.';
@@ -590,5 +627,50 @@ class HttpApiService implements ApiService {
       throw const ApiException('Dữ liệu import job không hợp lệ.');
     }
     return ImportJob.fromJson(data);
+  }
+
+  // ------------------------- Thêm chương vào truyện đã có ------------------
+
+  @override
+  Future<Chapter> importChapterFromUrl(
+    int storyId, {
+    required String chapterUrl,
+    int? chapterNo,
+    String? title,
+  }) async {
+    // Timeout riêng: backend cào + dịch đồng bộ trong request (~60s).
+    final dynamic data = await _request(
+      'POST',
+      '/stories/$storyId/chapters/import',
+      payload: <String, dynamic>{
+        'chapterUrl': chapterUrl.trim(),
+        'chapterNo': ?chapterNo,
+        'title': ?title,
+      },
+      timeout: ApiConfig.importChapterTimeout,
+    );
+    return _readChapter(data);
+  }
+
+  @override
+  Future<Chapter> importChapterFromText(
+    int storyId, {
+    required String text,
+    required String sourceLang,
+    int? chapterNo,
+    String? title,
+  }) async {
+    final dynamic data = await _request(
+      'POST',
+      '/stories/$storyId/chapters/import-text',
+      payload: <String, dynamic>{
+        'text': text,
+        'sourceLang': sourceLang,
+        'chapterNo': ?chapterNo,
+        'title': ?title,
+      },
+      timeout: ApiConfig.importChapterTimeout,
+    );
+    return _readChapter(data);
   }
 }

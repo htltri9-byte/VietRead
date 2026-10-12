@@ -127,4 +127,171 @@ void main() {
     // Đổi lại cờ là dùng mock mà không phải sửa code nơi khác
     expect(MockApiService(), isA<MockApiService>());
   });
+
+  // ---------------- Thêm chương vào truyện đã có (A3.11) ------------------
+
+  group('importChapterFromUrl / importChapterFromText (mock)', () {
+    setUp(MockApiService.resetStoriesForTest);
+
+    const String link =
+        'https://m.qidian.com/chapter/1040765595/806596284/';
+
+    Future<MockApiService> ownerApi() async {
+      final MockApiService mock = api();
+      await mock.login('tacgia@vietread.vn', 'VietRead@123');
+      return mock;
+    }
+
+    test('thêm link thành công → max+1, chống trùng 409, đúng host www/m',
+        () async {
+      final MockApiService mock = await ownerApi();
+
+      final Chapter ch = await mock.importChapterFromUrl(
+        1,
+        chapterUrl: link,
+      );
+      expect(ch.index, 129); // truyện 1 có 128 chương → MAX+1
+      expect(ch.storyId, 1);
+      expect(ch.content, contains('Qidian'));
+      expect(await mock.fetchChapters(1, pageSize: 200), hasLength(129));
+
+      // Dán lại cùng chương (bản www — khác host, cùng chapterId) → 409
+      expect(
+        mock.importChapterFromUrl(
+          1,
+          chapterUrl: 'https://www.qidian.com/chapter/1040765595/806596284/',
+        ),
+        throwsA(
+          isA<ApiException>()
+              .having((ApiException e) => e.statusCode, 'statusCode', 409)
+              .having(
+                (ApiException e) => e.message,
+                'message',
+                contains('Chương này đã được nhập'),
+              ),
+        ),
+      );
+    });
+
+    test('link thuộc truyện khác / không phải Qidian / lỗi nguồn VIP', () async {
+      final MockApiService mock = await ownerApi();
+      await mock.importChapterFromUrl(1, chapterUrl: link); // ghi bookId
+
+      // BookId khác → chống nhầm truyện
+      expect(
+        mock.importChapterFromUrl(
+          1,
+          chapterUrl: 'https://m.qidian.com/chapter/1035420986/806596284/',
+        ),
+        throwsA(
+          isA<ApiException>()
+              .having((ApiException e) => e.statusCode, 'statusCode', 400)
+              .having(
+                (ApiException e) => e.message,
+                'message',
+                'Link này thuộc truyện khác',
+              ),
+        ),
+      );
+
+      // Domain khác → 400
+      expect(
+        mock.importChapterFromUrl(1, chapterUrl: 'https://example.com/x/1'),
+        throwsA(
+          isA<ApiException>().having(
+            (ApiException e) => e.message,
+            'message',
+            'Chỉ hỗ trợ thêm chương từ Qidian',
+          ),
+        ),
+      );
+
+      // Giả lập lỗi nguồn (chương VIP) — không vượt rào
+      expect(
+        mock.importChapterFromUrl(
+          1,
+          chapterUrl: 'https://m.qidian.com/chapter/1040765595/vip/',
+        ),
+        throwsA(
+          isA<ApiException>().having(
+            (ApiException e) => e.message,
+            'message',
+            contains('VIP'),
+          ),
+        ),
+      );
+    });
+
+    test('không phải chủ truyện → 403', () async {
+      final MockApiService mock = api();
+      await mock.login('docgia@vietread.vn', 'VietRead@123');
+      expect(
+        mock.importChapterFromUrl(1, chapterUrl: link),
+        throwsA(
+          isA<ApiException>().having(
+            (ApiException e) => e.statusCode,
+            'statusCode',
+            403,
+          ),
+        ),
+      );
+    });
+
+    test('import-text: vi lưu nguyên, zh mô phỏng dịch, tự đánh số + 409',
+        () async {
+      final MockApiService mock = await ownerApi();
+
+      final Chapter vi = await mock.importChapterFromText(
+        1,
+        text: 'Nội dung tiếng Việt giữ nguyên.',
+        sourceLang: 'vi',
+      );
+      expect(vi.index, 129);
+      expect(vi.content, 'Nội dung tiếng Việt giữ nguyên.');
+
+      final Chapter zh = await mock.importChapterFromText(
+        1,
+        text: '第一章\nNội dung tiếng Trung.',
+        sourceLang: 'zh',
+      );
+      expect(zh.index, 130); // MAX+1 sau chương 129
+      expect(zh.content, startsWith('Bản dịch'));
+
+      // chapterNo được ưu tiên; gửi lại số đã có → 409
+      final Chapter ten = await mock.importChapterFromText(
+        1,
+        text: 'Chương số 200.',
+        sourceLang: 'vi',
+        chapterNo: 200,
+      );
+      expect(ten.index, 200);
+      expect(
+        mock.importChapterFromText(
+          1,
+          text: 'Trùng số.',
+          sourceLang: 'vi',
+          chapterNo: 200,
+        ),
+        throwsA(
+          isA<ApiException>().having(
+            (ApiException e) => e.statusCode,
+            'statusCode',
+            409,
+          ),
+        ),
+      );
+
+      // sourceLang sai → 400
+      expect(
+        mock.importChapterFromText(1, text: 'abc', sourceLang: 'fr'),
+        throwsA(
+          isA<ApiException>().having(
+            (ApiException e) => e.statusCode,
+            'statusCode',
+            400,
+          ),
+        ),
+      );
+    });
+  });
 }

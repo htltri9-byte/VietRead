@@ -63,6 +63,10 @@ class Story(Base):
         "Rating", Numeric(3, 2), nullable=False, default=Decimal("0")
     )
     source_url: Mapped[str | None] = mapped_column("SourceUrl", Unicode(1000), nullable=True)
+    # Mã truyện trên nguồn (vd: bookId Qidian) — NULL với truyện nhập trước migration
+    source_book_id: Mapped[str | None] = mapped_column(
+        "SourceBookId", Unicode(100), nullable=True
+    )
     is_draft: Mapped[bool] = mapped_column("IsDraft", Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         "CreatedAt", DateTime, nullable=False, server_default=_utc_now_db()
@@ -111,6 +115,15 @@ class Chapter(Base):
     content: Mapped[str] = mapped_column("Content", UnicodeText, nullable=False)
     original_content: Mapped[str | None] = mapped_column(
         "OriginalContent", UnicodeText, nullable=True
+    )
+    # Mã chương + link trên nguồn (vd: Qidian) — NULL với chương nhập trước migration.
+    # Unique index lọc (StoryId, SourceChapterId) WHERE SourceChapterId IS NOT NULL
+    # chặn cùng một chương được nhập 2 lần vào cùng truyện (xem migrate_source_tracking.sql).
+    source_chapter_id: Mapped[str | None] = mapped_column(
+        "SourceChapterId", Unicode(200), nullable=True
+    )
+    source_chapter_url: Mapped[str | None] = mapped_column(
+        "SourceChapterUrl", Unicode(1000), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         "CreatedAt", DateTime, nullable=False, server_default=_utc_now_db()

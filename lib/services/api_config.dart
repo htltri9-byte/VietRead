@@ -34,4 +34,8 @@ class ApiConfig {
 
   /// Timeout cho request thật (A6: bắt lỗi mạng, có timeout).
   static const Duration requestTimeout = Duration(seconds: 10);
+
+  /// Timeout riêng cho thêm chương từ link / dán văn bản — backend cào + dịch
+  /// đồng bộ trong request nên cho phép tới ~60 giây.
+  static const Duration importChapterTimeout = Duration(seconds: 65);
 }

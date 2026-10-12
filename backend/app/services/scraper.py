@@ -426,6 +426,59 @@ def host_of(url: str) -> str:
     return netloc.split("@")[-1].split(":")[0].lower()
 
 
+# ---------------------------------------------------------------------------
+# Tách bookId / chapterId từ link Qidian (xác nhận thực tế trên m.qidian.com)
+# ---------------------------------------------------------------------------
+
+# Định dạng link chương Qidian (đã gọi thử):
+#   https://m.qidian.com/chapter/{bookId}/{chapterId}/   (bản mobile — đọc được)
+#   https://www.qidian.com/chapter/{bookId}/{chapterId}/ (bản desktop — chặn bot)
+#   https://m.qidian.com/book/{bookId}/{chapterId}.html  (đường dẫn cũ, redirect)
+_QIDIAN_CHAPTER_RE = re.compile(r"/chapter/(\d+)/(\d+)")
+_QIDIAN_LEGACY_CHAPTER_RE = re.compile(r"/book/(\d+)/(\d+)\.html$")
+_QIDIAN_BOOK_RE = re.compile(r"/book/(\d+)")
+
+
+def is_qidian_url(url: str) -> bool:
+    """Link có thuộc domain Qidian (qidian.com hoặc subdomain) không."""
+    host = host_of(url)
+    return host == "qidian.com" or host.endswith(".qidian.com")
+
+
+def qidian_book_id(url: str) -> str | None:
+    """bookId từ link truyện Qidian (`/book/{id}/` hoặc `/chapter/{id}/{id}/`).
+
+    Trả None nếu không phải link Qidian hoặc không khớp định dạng — dùng khi
+    ghi `Stories.SourceBookId` (nhập cả bộ / thêm chương mới) bỏ qua được.
+    """
+    if not is_qidian_url(url):
+        return None
+    path = urlparse(url).path
+    m = _QIDIAN_CHAPTER_RE.search(path)
+    if m:
+        return m.group(1)
+    m = _QIDIAN_BOOK_RE.search(path)
+    return m.group(1) if m else None
+
+
+def qidian_chapter_id(url: str) -> tuple[str, str] | None:
+    """`(bookId, chapterId)` từ link chương Qidian; None nếu không phải/link lạ.
+
+    Dùng để ghi `Chapters.SourceChapterId/SourceChapterUrl` — chống trùng chương
+    khi thêm chương vào truyện đã có.
+    """
+    if not is_qidian_url(url):
+        return None
+    path = urlparse(url).path
+    m = _QIDIAN_CHAPTER_RE.search(path)
+    if m:
+        return m.group(1), m.group(2)
+    m = _QIDIAN_LEGACY_CHAPTER_RE.search(path)
+    if m:
+        return m.group(1), m.group(2)
+    return None
+
+
 def get_adapter(url: str) -> SourceAdapter | None:
     """Chọn adapter theo domain của link; `None` = nguồn chưa được hỗ trợ."""
     host = host_of(url)

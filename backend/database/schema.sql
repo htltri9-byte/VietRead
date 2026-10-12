@@ -20,6 +20,10 @@ GO
 USE VietRead;
 GO
 
+-- Unique index lọc (dưới đây) yêu cầu QUOTED_IDENTIFIER ON
+SET QUOTED_IDENTIFIER ON;
+GO
+
 /* ------------------------------ Users ------------------------------ */
 CREATE TABLE dbo.Users (
     Id           INT IDENTITY(1,1) NOT NULL,
@@ -52,6 +56,8 @@ CREATE TABLE dbo.Stories (
     Status      NVARCHAR(20)   NOT NULL CONSTRAINT DF_Stories_Status DEFAULT (N'ongoing'), -- ongoing | completed
     Rating      DECIMAL(3,2)   NOT NULL CONSTRAINT DF_Stories_Rating DEFAULT (0),
     SourceUrl   NVARCHAR(1000) NULL,
+    -- Mã truyện trên nguồn (vd: bookId Qidian) — chống nhầm chương khi thêm link
+    SourceBookId NVARCHAR(100) NULL,
     IsDraft     BIT            NOT NULL CONSTRAINT DF_Stories_IsDraft DEFAULT (0),
     CreatedAt   DATETIME2      NOT NULL CONSTRAINT DF_Stories_CreatedAt DEFAULT (SYSUTCDATETIME()),
     UpdatedAt   DATETIME2      NOT NULL CONSTRAINT DF_Stories_UpdatedAt DEFAULT (SYSUTCDATETIME()),
@@ -78,6 +84,9 @@ CREATE TABLE dbo.Chapters (
     Title           NVARCHAR(255)  NOT NULL,
     Content         NVARCHAR(MAX)  NOT NULL,
     OriginalContent NVARCHAR(MAX)  NULL,
+    -- Mã chương + link trên nguồn (vd: Qidian) — chống trùng khi thêm chương mới
+    SourceChapterId  NVARCHAR(200)  NULL,
+    SourceChapterUrl NVARCHAR(1000) NULL,
     CreatedAt       DATETIME2      NOT NULL CONSTRAINT DF_Chapters_CreatedAt DEFAULT (SYSUTCDATETIME()),
     UpdatedAt       DATETIME2      NOT NULL CONSTRAINT DF_Chapters_UpdatedAt DEFAULT (SYSUTCDATETIME()),
     CONSTRAINT PK_Chapters PRIMARY KEY (Id),
@@ -141,6 +150,10 @@ CREATE INDEX IX_Stories_UpdatedAt ON dbo.Stories (UpdatedAt DESC);
 CREATE INDEX IX_Stories_Title ON dbo.Stories (Title);
 -- Danh sách chương của một truyện
 CREATE INDEX IX_Chapters_StoryId ON dbo.Chapters (StoryId);
+-- Chặn trùng chương cùng nguồn trong một truyện (bỏ qua hàng SourceChapterId NULL)
+CREATE UNIQUE INDEX UX_Chapters_StoryId_SourceChapterId
+    ON dbo.Chapters (StoryId, SourceChapterId)
+    WHERE SourceChapterId IS NOT NULL;
 -- Danh sách bình luận theo truyện
 CREATE INDEX IX_Comments_StoryId ON dbo.Comments (StoryId);
 CREATE INDEX IX_Comments_UserId ON dbo.Comments (UserId);

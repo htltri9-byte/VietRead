@@ -1,4 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vietread/models/user.dart';
 import 'package:vietread/services/api_service.dart';
@@ -146,6 +148,104 @@ void main() {
       final AuthService fresh = AuthService.resetForTest(api: mock());
       await fresh.restore();
       expect(fresh.isLoggedIn, isFalse);
+    });
+  });
+
+  group('401 giữa phiên → tự đăng xuất (không kẹt phiên chết)', () {
+    /// Backend trả 401 cho mọi request trừ login (khi [rejectToken] = true).
+    http.Response jsonResponse(String body, int status) => http.Response(
+      body,
+      status,
+      headers: <String, String>{'content-type': 'application/json'},
+    );
+
+    const String loginOk =
+        '{"token":"fake-jwt","user":{"id":1,"name":"Lê Minh Anh",'
+        '"email":"docgia@vietread.vn"}}';
+    const String tokenError =
+        '{"message":"Token không hợp lệ hoặc đã hết hạn"}';
+
+    test('request trả 401 → ném lỗi đúng message + xoá phiên ngay', () async {
+      bool rejectToken = false;
+      final MockClient client = MockClient((http.Request request) async {
+        if (request.url.path.endsWith('/auth/login')) {
+          return jsonResponse(loginOk, 200);
+        }
+        if (rejectToken) return jsonResponse(tokenError, 401);
+        return jsonResponse('{}', 200);
+      });
+      final HttpApiService api = HttpApiService(
+        client: client,
+        baseUrl: 'http://localhost:8000',
+      );
+      final AuthService auth = AuthService.resetForTest(api: api);
+
+      await auth.login('docgia@vietread.vn', 'VietRead@123');
+      expect(auth.isLoggedIn, isTrue);
+
+      // Backend bây giờ coi token là hết hạn/sai khoá ký (như sau khi đổi
+      // SECRET_KEY hoặc đăng nhập ở phiên backend khác).
+      rejectToken = true;
+      await expectLater(
+        api.fetchMe(),
+        throwsA(
+          isA<ApiException>()
+              .having((ApiException e) => e.statusCode, 'statusCode', 401)
+              .having(
+                (ApiException e) => e.message,
+                'message',
+                contains('Token không hợp lệ'),
+              ),
+        ),
+      );
+      await pumpEventQueue();
+
+      // Phiên chết bị xoá → UI chuyển về màn đăng nhập thay vì kẹt form.
+      expect(auth.isLoggedIn, isFalse);
+      final SharedPreferences sp = await SharedPreferences.getInstance();
+      expect(sp.getString(AuthService.tokenKey), isNull);
+      expect(sp.getString(AuthService.userKey), isNull);
+    });
+
+    test('401 từ /auth/login (sai mật khẩu) KHÔNG đăng xuất phiên đang có',
+        () async {
+      bool badPassword = false;
+      final MockClient client = MockClient((http.Request request) async {
+        if (request.url.path.endsWith('/auth/login')) {
+          return badPassword
+              ? jsonResponse(
+                  '{"message":"Email hoặc mật khẩu không đúng"}',
+                  401,
+                )
+              : jsonResponse(loginOk, 200);
+        }
+        return jsonResponse('{}', 200);
+      });
+      final HttpApiService api = HttpApiService(
+        client: client,
+        baseUrl: 'http://localhost:8000',
+      );
+      final AuthService auth = AuthService.resetForTest(api: api);
+
+      await auth.login('docgia@vietread.vn', 'VietRead@123');
+      expect(auth.isLoggedIn, isTrue);
+
+      badPassword = true;
+      await expectLater(
+        api.login('docgia@vietread.vn', 'sai-mat-khau'),
+        throwsA(
+          isA<ApiException>().having(
+            (ApiException e) => e.message,
+            'message',
+            'Email hoặc mật khẩu không đúng',
+          ),
+        ),
+      );
+      await pumpEventQueue();
+      // Sai mật khẩu là lỗi nhập liệu, không phải phiên hết hạn.
+      expect(auth.isLoggedIn, isTrue);
+      final SharedPreferences sp = await SharedPreferences.getInstance();
+      expect(sp.getString(AuthService.tokenKey), isNotEmpty);
     });
   });
 }

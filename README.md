@@ -442,17 +442,59 @@ Tay trên emulator (`flutter run`, backend đang chạy; `API_BASE_URL` mặc đ
 > Sách Qidian dễ có hàng trăm chương: khi demo nên đặt `IMPORT_MAX_CHAPTERS`
 > (ví dụ `5`) trong `backend/.env` để job chạy nhanh; để `0` là nhập toàn bộ.
 
-### Hướng dẫn test Bước 10
+### Thêm chương vào truyện đã có — link Qidian / dán văn bản (A3.11)
+
+Truyện nhập xong mà nguồn ra chương mới, **không cần import lại** (tránh trùng
+truyện + tốn quota dịch) — dán link chương vào truyện sẵn có:
+
+- **Backend** [`backend/app/routers/chapter_import.py`](backend/app/routers/chapter_import.py):
+  - `POST /stories/{id}/chapters/import { chapterUrl, chapterNo?, title? }` —
+    chỉ chủ truyện (404/403); **chỉ domain Qidian** (`www.`/`m.qidian.com`, khác
+    domain → 400 "Chỉ hỗ trợ thêm chương từ Qidian"); định dạng chương đã kiểm
+    chứng thực tế: `/chapter/{bookId}/{chapterId}/` → tách bookId/chapterId →
+    chống nhầm truyện (`SourceBookId` khác → 400 "Link này thuộc truyện khác") →
+    chống trùng (`SourceChapterId` đã có → 409 "Chương này đã được nhập") →
+    gọi `parse_chapter` có sẵn (tự rewrite `www` → `m.qidian.com`) → dịch theo
+    `TRANSLATE_MODE` → lưu `Content` = bản dịch, `OriginalContent` = bản gốc.
+    Số chương: `chapterNo` → đọc `第N章` từ tiêu đề → `MAX+1`; trùng số → 409.
+    Chạy đồng bộ trong request (~2 giây đo được, ở trong hạn 60s).
+  - `POST /stories/{id}/chapters/import-text { text, sourceLang: zh|vi, chapterNo?, title? }` —
+    dán thẳng văn bản khi không cào được; `vi` lưu nguyên, `zh` dịch rồi lưu bản
+    gốc; giới hạn 100.000 ký tự.
+  - Lỗi phân biệt: sai định dạng/domain/link truyện khác/VIP → 400; Qidian chặn
+    hoặc cào rỗng → 502 (kèm HTTP status); dịch lỗi/hết quota → 503; traceback
+    log ra terminal uvicorn. **Không vượt rào** chương trả phí (không cookie/tài khoản).
+- **DB** ([`backend/database/migrate_source_tracking.sql`](backend/database/migrate_source_tracking.sql)):
+  thêm `Stories.SourceBookId`, `Chapters.SourceChapterId`,
+  `Chapters.SourceChapterUrl` + unique index lọc `(StoryId, SourceChapterId)`
+  (`WHERE SourceChapterId IS NOT NULL`) — **idempotent**, chạy lại an toàn, dữ
+  liệu cũ giữ nguyên (cột mới NULL → chương nhập trước migration chưa chặn trùng
+  được theo link, chỉ chặn theo số chương). `schema.sql` đã cập nhật cho DB mới;
+  luồng nhập cả bộ giờ ghi thêm bookId/chapterId từ URL.
+- **Flutter**:
+  - [`lib/screens/chapter_manager_screen.dart`](lib/screens/chapter_manager_screen.dart): nút icon
+    (tooltip "Thêm chương từ link") cạnh nút **Chương mới** → mở bottom sheet
+    [`lib/screens/chapter_import_sheet.dart`](lib/screens/chapter_import_sheet.dart):
+    tab **Dán link** (link + số chương "để trống = tự đánh số") / tab **Dán văn bản**
+    (nội dung, **tự nhận diện ngôn ngữ dán** — có chữ Trung thì tự chọn "Trung"
+    để dịch sang tiếng Việt, không thì "Việt" giữ nguyên; vẫn bấm chọn tay được); validate link trên ô (rỗng / sai URL / không phải
+    Qidian); đang xử lý thì vô hiệu nút; lỗi hiện đúng message backend + **Thử lại**;
+    thành công → đóng sheet, nạp lại danh sách, SnackBar "Đã thêm chương mới.".
+  - `ApiService.importChapterFromUrl(...)` / `importChapterFromText(...)` (cả Http
+    lẫn Mock — mock mô phỏng lỗi trùng 409 / link truyện khác / lỗi nguồn VIP;
+    timeout riêng 65s cho request đồng bộ).
+
+### Hướng dẫn test Bước 10 + A3.11
 
 ```bash
 flutter analyze        # No issues found
-flutter test           # 107/107 pass (5 test mới của màn Nhập truyện)
+flutter test           # 116/116 pass (5 test sheet Thêm chương + 5 test mock)
 
-# Backend thật (đã gồm POST/GET /imports):
+# Backend thật (đã gồm POST/GET /imports + /chapters/import + /import-text):
 ./.venv/Scripts/python.exe -m uvicorn --app-dir backend app.main:app --host 127.0.0.1 --port 8000
-# (terminal khác — 116 kiểm tra HTTP; check import Done cần mạng để dịch):
+# (terminal khác — 145 kiểm tra HTTP; check import Done + thêm chương link Qidian cần mạng):
 cd backend && PYTHONUTF8=1 ./.venv/Scripts/python.exe test_api.py
-# → TẤT CẢ 116 KIỂM TRA ĐỀU PASS
+# → TẤT CẢ 145 KIỂM TRA ĐỀU PASS
 ```
 
 Tay trên emulator (`flutter run`, backend đang chạy):
@@ -468,6 +510,25 @@ Tay trên emulator (`flutter run`, backend đang chạy):
    kèm "...chưa được hỗ trợ..." → nút **Thử lại**.
 5. Nguồn thật (Qidian/Fanqie): dán link bình thường — nếu nguồn chặn IP hoặc nội
    dung trả phí thì job Failed kèm lý do rõ ràng (đúng C4).
+
+### Hướng dẫn test tay — Thêm chương (A3.11)
+
+1. Chạy migration (nếu DB tạo trước khi có tính năng này):
+   `sqlcmd -S localhost -E -C -b -f 65001 -i backend/database/migrate_source_tracking.sql`
+   (chạy lại lần 2 vẫn exit 0 — idempotent).
+2. Mở app → truyện của tôi → **Quản lý chương** → bấm nút icon cạnh **Chương mới**
+   (tooltip "Thêm chương từ link").
+3. Dán link chương Qidian **miễn phí** thật, ví dụ
+   `https://m.qidian.com/chapter/1040765595/806596284/` (chương 1《夜无疆》) →
+   **Thêm** → SnackBar "Đã thêm chương mới.", danh sách có chương mới.
+4. Dán lại đúng link đó → 409 "Chương này đã được nhập (chương số …)" + **Thử lại**.
+5. Dán link chương VIP, ví dụ `https://m.qidian.com/chapter/1040765595/933954558/`
+   → lỗi "…trả phí (VIP)…" (không vượt rào).
+6. Dán link book khác, ví dụ `https://m.qidian.com/chapter/1035420986/806596284/`
+   → "Link này thuộc truyện khác"; `https://example.com/...` → "Chỉ hỗ trợ thêm
+   chương từ Qidian".
+7. Tab **Dán văn bản**: chọn nguồn **Việt** → dán text → **Thêm** (lưu nguyên);
+   chọn **Trung** → dán chữ Trung → **Thêm** (dịch rồi lưu).
 
 ---
 
@@ -496,15 +557,15 @@ Tay trên emulator (`flutter run`, backend đang chạy):
 
 ```bash
 flutter analyze        # No issues found
-flutter test           # 107/107 pass (2 test mới: skeleton Đăng truyện & Quản lý chương)
+flutter test           # 116/116 pass
 
-# Backend — 116 kiểm tra HTTP (bật server trước):
+# Backend — 145 kiểm tra HTTP (bật server trước):
 cd backend && PYTHONUTF8=1 ./.venv/Scripts/python.exe test_api.py
-# → TẤT CẢ 116 KIỂM TRA ĐỀU PASS
+# → TẤT CẢ 145 KIỂM TRA ĐỀU PASS
 ```
 
-Kết quả mới nhất trên máy này: `flutter analyze` 0 lỗi · `flutter test` **107/107**
-· `test_api.py` **116/116** (đều exit code 0).
+Kết quả mới nhất trên máy này: `flutter analyze` 0 lỗi · `flutter test` **116/116**
+· `test_api.py` **145/145** (đều exit code 0).
 
 ### Checklist tổng hợp — tự chạy tay 1 vòng (mỗi mục 1–2 phút)
 
@@ -523,6 +584,9 @@ Kết quả mới nhất trên máy này: `flutter analyze` 0 lỗi · `flutter 
    **Hoàn tất** → truyện nháp hiện trong "Truyện của tôi".
 8. **Trạng thái lỗi import**: dán `https://example.com/book/1` → job **Thất bại**
    kèm lý do + nút **Thử lại**.
+9. **Thêm chương**: Quản lý chương → nút icon cạnh **Chương mới** → dán link
+   chương Qidian miễn phí → chương mới hiện trong danh sách; dán lại link đó →
+   lỗi trùng 409 + **Thử lại**; thử link VIP / link book khác → lỗi đúng.
 
 ---
 
