@@ -28,9 +28,12 @@ from sqlalchemy.orm import Session
 
 from .. import security
 from ..database import get_db
-from ..models import Chapter, Story, User
+from ..models import Chapter, User
 from ..schemas import ChapterImportByText, ChapterImportByUrl, ChapterOut
+from ..services import glossary as glossary_service
+from ..services.story_words import load_choices, load_learned_keys, load_skips
 from ..services.scraper import (
+    CHAPTER_PREFIX_RE,
     AdapterError,
     ParsedChapter,
     get_adapter,
@@ -38,7 +41,7 @@ from ..services.scraper import (
     qidian_chapter_id,
 )
 from ..services.translator import TranslationError, translate_text
-from .stories import require_owner, utc_now
+from .stories import get_owned_story, utc_now
 
 router = APIRouter(tags=["chapters"])
 
@@ -47,25 +50,13 @@ logger = logging.getLogger("vietread.chapter_import")
 # "第843章 火泉涉及世界终极真相" — đọc số chương từ tiêu đề gốc (chữ số Ả Rập)
 _CHAPTER_NO_RE = re.compile(r"第\s*(\d+)\s*章")
 
-# Bỏ tiền tố "第N章" khi dịch tên chương (giống app/services/import_worker.py)
-_CHAPTER_PREFIX = re.compile(
-    r"^\s*第\s*[0-9０-９零一二三四五六七八九十百千两兩]+\s*[章节回卷篇话序]\s*[:：]?\s*"
-)
+# Bỏ tiền tố "第N章" khi dịch tên chương (xem scraper.CHAPTER_PREFIX_RE)
 
 # Gợi dẫn định dạng link chương Qidian (đã kiểm chứng thực tế trên m.qidian.com)
 _FORMAT_HINT = (
     "Định dạng đúng: https://www.qidian.com/chapter/{mã truyện}/{mã chương}/ "
     "(vd: https://m.qidian.com/chapter/1040765595/806596284/)"
 )
-
-
-def _owned_story(db: Session, story_id: int, user: User) -> Story:
-    """Lấy truyện để thêm chương: không tồn tại → 404, không phải chủ → 403."""
-    story = db.get(Story, story_id)
-    if story is None:
-        raise HTTPException(status_code=404, detail="Không tìm thấy truyện")
-    require_owner(story, user)
-    return story
 
 
 def _is_http_url(url: str) -> bool:
@@ -123,10 +114,29 @@ def _scrape_chapter(url: str) -> ParsedChapter:
         )
 
 
-def _translate(text: str) -> str:
-    """Dịch zh → vi theo TRANSLATE_MODE hiện hành. Lỗi dịch → 503 (không phải lỗi cào)."""
+def _translate(
+    text: str,
+    mark_alternatives: bool = False,
+    mark_level: str | None = None,
+    key_choices: dict[str, str] | None = None,
+    skip_keys: set[str] | None = None,
+) -> str:
+    """Dịch zh → vi theo TRANSLATE_MODE hiện hành. Lỗi dịch → 503 (không phải lỗi cào).
+
+    `mark_alternatives=True` — cụm nhiều nghĩa (đã qua bộ lọc [app.marking])
+    thành marker `{中文|nghĩa1|nghĩa2}` (chỉ dùng cho nội dung chương, không
+    dùng cho tên chương). `mark_level` — mức gợi ý; `key_choices`/`skip_keys` —
+    nghĩa đã chọn / khóa bỏ hỏi riêng của truyện.
+    """
     try:
-        return translate_text(text, "vi")
+        return translate_text(
+            text,
+            "vi",
+            mark_alternatives=mark_alternatives,
+            mark_level=mark_level,
+            key_choices=key_choices,
+            skip_keys=skip_keys,
+        )
     except TranslationError as exc:
         logger.error("Dịch nội dung chương lỗi: %s", exc, exc_info=True)
         raise HTTPException(
@@ -200,7 +210,7 @@ def import_chapter_from_url(
 
     Chạy đồng bộ trong request (cào 1 chương → dịch → lưu), khoảng ≤ 60 giây.
     """
-    story = _owned_story(db, story_id, user)
+    story = get_owned_story(db, story_id, user)
     book_id, chapter_id = _parse_qidian_chapter_url(payload.chapter_url)
 
     # Chống nhầm truyện: link thuộc bookId khác → 400.
@@ -249,10 +259,20 @@ def import_chapter_from_url(
     if payload.title:
         title = payload.title
     else:
-        title_zh = _CHAPTER_PREFIX.sub("", parsed.title).strip() or parsed.title
+        title_zh = CHAPTER_PREFIX_RE.sub("", parsed.title).strip() or parsed.title
         title = (_translate(title_zh) or "").strip()[:255] or f"Chương {index}"
 
-    content_vi = _translate(parsed.content)  # TranslationError → 503
+    content_vi = _translate(
+        parsed.content,
+        mark_alternatives=True,
+        mark_level=payload.mark_level,
+        key_choices=load_choices(db, story_id),
+        skip_keys=load_skips(db, story_id) | load_learned_keys(db, user.id),
+    )  # TranslationError → 503
+    # Chương mới: áp quy tắc "Tìm & thay thế" ApplyToFuture của truyện (nếu có).
+    content_vi, replaced = glossary_service.apply_rules(db, story_id, content_vi)
+    if replaced:
+        logger.info("Thêm chương Qidian story=%s: áp %d chỗ thay thế", story_id, replaced)
 
     chapter = Chapter(
         story_id=story_id,
@@ -289,7 +309,7 @@ def import_chapter_from_text(
     ``sourceLang=vi``: lưu nguyên làm Content (không dịch).
     ``sourceLang=zh``: dịch sang vi lưu Content, bản gốc lưu OriginalContent.
     """
-    story = _owned_story(db, story_id, user)
+    story = get_owned_story(db, story_id, user)
     text = payload.text
 
     # Gợi đánh số từ tên chương client gửi, không thì dòng đầu tiên của văn bản.
@@ -298,13 +318,27 @@ def import_chapter_from_text(
     index = _resolve_index(db, story_id, payload.chapter_no, hint)
 
     is_zh = payload.source_lang == "zh"
-    content_vi = _translate(text) if is_zh else text
+    content_vi = (
+        _translate(
+            text,
+            mark_alternatives=True,
+            mark_level=payload.mark_level,
+            key_choices=load_choices(db, story_id),
+            skip_keys=load_skips(db, story_id) | load_learned_keys(db, user.id),
+        )
+        if is_zh
+        else text
+    )
+    # Chương mới (kể cả dán nguyên văn): áp quy tắc ApplyToFuture của truyện.
+    content_vi, replaced = glossary_service.apply_rules(db, story_id, content_vi)
+    if replaced:
+        logger.info("Thêm chương dán văn bản story=%s: áp %d chỗ thay thế", story_id, replaced)
 
     # Tên chương: client gửi → dòng đầu (bỏ "第N章", dịch nếu zh) → "Chương N".
     if payload.title:
         title = payload.title
     else:
-        candidate = _CHAPTER_PREFIX.sub("", first_line).strip() if is_zh else first_line
+        candidate = CHAPTER_PREFIX_RE.sub("", first_line).strip() if is_zh else first_line
         if candidate and len(candidate) <= 120:
             title = ((_translate(candidate) if is_zh else candidate).strip() or "")[
                 :255

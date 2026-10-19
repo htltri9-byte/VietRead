@@ -141,6 +141,114 @@ CREATE TABLE dbo.ImportJobs (
 );
 GO
 
+/* --------------------------- StoryGlossary ------------------------ */
+-- Quy tắc "Tìm & thay thế" riêng của MỘT truyện (bảng mới — migrate_glossary_revisions.sql)
+CREATE TABLE dbo.StoryGlossary (
+    Id            INT IDENTITY(1,1) NOT NULL,
+    StoryId       INT           NOT NULL,
+    FindText      NVARCHAR(200) NOT NULL,
+    ReplaceText   NVARCHAR(200) NOT NULL,
+    MatchCase     BIT           NOT NULL CONSTRAINT DF_StoryGlossary_MatchCase DEFAULT (0),
+    WholeWord     BIT           NOT NULL CONSTRAINT DF_StoryGlossary_WholeWord DEFAULT (0),
+    ApplyToFuture BIT           NOT NULL CONSTRAINT DF_StoryGlossary_ApplyToFuture DEFAULT (1),
+    CreatedAt     DATETIME2     NOT NULL CONSTRAINT DF_StoryGlossary_CreatedAt DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_StoryGlossary PRIMARY KEY (Id),
+    CONSTRAINT FK_StoryGlossary_StoryId FOREIGN KEY (StoryId) REFERENCES dbo.Stories(Id) ON DELETE CASCADE
+);
+GO
+
+/* -------------------------- ChapterRevisions ---------------------- */
+-- Snapshot chương TRƯỚC một lần tìm & thay thế — giữ tối đa 1 batch/truyện,
+-- batch mới xoá batch cũ; dùng cho POST /stories/{id}/replace/undo
+CREATE TABLE dbo.ChapterRevisions (
+    Id        INT IDENTITY(1,1) NOT NULL,
+    ChapterId INT           NOT NULL,
+    StoryId   INT           NOT NULL,
+    Title     NVARCHAR(255) NOT NULL,
+    Content   NVARCHAR(MAX) NOT NULL,
+    BatchId   NVARCHAR(36)  NOT NULL,
+    CreatedAt DATETIME2     NOT NULL CONSTRAINT DF_ChapterRevisions_CreatedAt DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_ChapterRevisions PRIMARY KEY (Id),
+    -- StoryId cascade (xoá truyện → mất revision); ChapterId cố tình KHÔNG
+    -- cascade như Comments để không tạo 2 đường cascade từ Stories — xoá chương
+    -- thì xoá revision trong code (xem routers/chapters.py).
+    CONSTRAINT FK_ChapterRevisions_StoryId FOREIGN KEY (StoryId) REFERENCES dbo.Stories(Id) ON DELETE CASCADE,
+    CONSTRAINT FK_ChapterRevisions_ChapterId FOREIGN KEY (ChapterId) REFERENCES dbo.Chapters(Id)
+);
+GO
+
+/* --------------------------- DictionaryWords ------------------------ */
+-- Từ điển cá nhân: mỗi từ người dùng thêm qua POST /dictionary/names
+-- (bảng mới — migrate_dictionary_words.sql)
+CREATE TABLE dbo.DictionaryWords (
+    Id        INT IDENTITY(1,1) NOT NULL,
+    UserId    INT           NOT NULL,
+    Zh        NVARCHAR(100) NOT NULL,
+    Vi        NVARCHAR(200) NOT NULL,
+    Tags      NVARCHAR(200) NULL, -- tags tuỳ chọn, phân cách bằng dấu phẩy
+    CreatedAt DATETIME2     NOT NULL CONSTRAINT DF_DictionaryWords_CreatedAt DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_DictionaryWords PRIMARY KEY (Id),
+    CONSTRAINT FK_DictionaryWords_UserId FOREIGN KEY (UserId) REFERENCES dbo.Users(Id) ON DELETE CASCADE,
+    CONSTRAINT UQ_DictionaryWords_UserId_Zh UNIQUE (UserId, Zh)
+);
+GO
+
+/* ------------------------- StoryWordChoices ------------------------ */
+-- "Luôn dùng nghĩa này cho truyện này": khóa Trung → nghĩa đã chọn —
+-- dịch/dịch lại chương CỦA TRUYỆN NÀY tự dùng nghĩa đó, không tạo marker
+-- (bảng mới — migrate_story_words.sql)
+CREATE TABLE dbo.StoryWordChoices (
+    Id         INT IDENTITY(1,1) NOT NULL,
+    StoryId    INT           NOT NULL,
+    SourceKey  NVARCHAR(200) NOT NULL,
+    ChosenText NVARCHAR(200) NOT NULL,
+    CreatedAt  DATETIME2     NOT NULL CONSTRAINT DF_StoryWordChoices_CreatedAt DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_StoryWordChoices PRIMARY KEY (Id),
+    CONSTRAINT FK_StoryWordChoices_StoryId FOREIGN KEY (StoryId) REFERENCES dbo.Stories(Id) ON DELETE CASCADE,
+    CONSTRAINT UQ_StoryWordChoices_StoryId_SourceKey UNIQUE (StoryId, SourceKey)
+);
+GO
+
+/* ------------------------ StoryIgnoredWords ------------------------ */
+-- "Không hỏi lại từ này" của RIÊNG bộ truyện (khác file chung no_mark.txt)
+CREATE TABLE dbo.StoryIgnoredWords (
+    Id        INT IDENTITY(1,1) NOT NULL,
+    StoryId   INT           NOT NULL,
+    SourceKey NVARCHAR(200) NOT NULL,
+    CreatedAt DATETIME2     NOT NULL CONSTRAINT DF_StoryIgnoredWords_CreatedAt DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_StoryIgnoredWords PRIMARY KEY (Id),
+    CONSTRAINT FK_StoryIgnoredWords_StoryId FOREIGN KEY (StoryId) REFERENCES dbo.Stories(Id) ON DELETE CASCADE,
+    CONSTRAINT UQ_StoryIgnoredWords_StoryId_SourceKey UNIQUE (StoryId, SourceKey)
+);
+GO
+
+/* ------------------------ UserWordStats + UserMarkRules ------------------------ */
+-- Học hành vi người đăng: thống kê lượt "Không hỏi lại" (mọi truyện, mỗi người)
+CREATE TABLE dbo.UserWordStats (
+    Id        INT IDENTITY(1,1) NOT NULL,
+    UserId    INT           NOT NULL,
+    SourceKey NVARCHAR(200) NOT NULL,
+    SkipCount INT           NOT NULL CONSTRAINT DF_UserWordStats_SkipCount DEFAULT (1),
+    UpdatedAt DATETIME2     NOT NULL CONSTRAINT DF_UserWordStats_UpdatedAt DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_UserWordStats PRIMARY KEY (Id),
+    CONSTRAINT FK_UserWordStats_UserId FOREIGN KEY (UserId) REFERENCES dbo.Users(Id) ON DELETE CASCADE,
+    CONSTRAINT UQ_UserWordStats_UserId_SourceKey UNIQUE (UserId, SourceKey)
+);
+GO
+-- Quy tắc học được khi SkipCount chạm LEARN_SKIP_THRESHOLD: khoá hết marker
+-- ở mọi truyện của người đó; xoá quy tắc (/me/mark-rules) → marker trở lại
+CREATE TABLE dbo.UserMarkRules (
+    Id        INT IDENTITY(1,1) NOT NULL,
+    UserId    INT           NOT NULL,
+    SourceKey NVARCHAR(200) NOT NULL,
+    SkipCount INT           NOT NULL CONSTRAINT DF_UserMarkRules_SkipCount DEFAULT (0),
+    CreatedAt DATETIME2     NOT NULL CONSTRAINT DF_UserMarkRules_CreatedAt DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_UserMarkRules PRIMARY KEY (Id),
+    CONSTRAINT FK_UserMarkRules_UserId FOREIGN KEY (UserId) REFERENCES dbo.Users(Id) ON DELETE CASCADE,
+    CONSTRAINT UQ_UserMarkRules_UserId_SourceKey UNIQUE (UserId, SourceKey)
+);
+GO
+
 /* ------------------------------ Index ------------------------------ */
 -- Danh sách truyện của một tác giả (trang "Truyện của tôi")
 CREATE INDEX IX_Stories_AuthorId ON dbo.Stories (AuthorId);
@@ -163,6 +271,15 @@ CREATE INDEX IX_Follows_StoryId ON dbo.Follows (StoryId);
 CREATE INDEX IX_StoryGenres_GenreId ON dbo.StoryGenres (GenreId);
 -- Job import của người dùng
 CREATE INDEX IX_ImportJobs_UserId ON dbo.ImportJobs (UserId);
+-- Quy tắc tìm & thay thế của một truyện
+CREATE INDEX IX_StoryGlossary_StoryId ON dbo.StoryGlossary (StoryId);
+-- Batch hoàn tác gần nhất: lọc theo truyện / chương
+CREATE INDEX IX_ChapterRevisions_StoryId ON dbo.ChapterRevisions (StoryId);
+CREATE INDEX IX_ChapterRevisions_ChapterId ON dbo.ChapterRevisions (ChapterId);
+-- Từ điển cá nhân của một người dùng
+CREATE INDEX IX_DictionaryWords_UserId ON dbo.DictionaryWords (UserId);
+-- Nghĩa đã chọn / từ bỏ hỏi theo truyện: UNIQUE (StoryId, SourceKey) đã tạo
+-- index theo prefix StoryId nên không cần thêm index riêng
 GO
 
 PRINT N'Đã tạo/xây dựng xong CSDL VietRead.';

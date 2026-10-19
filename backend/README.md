@@ -49,6 +49,58 @@ Thêm `Stories.SourceBookId`, `Chapters.SourceChapterId`, `Chapters.SourceChapte
 (chống trùng chương khi thêm chương từ link Qidian). Dữ liệu cũ giữ nguyên
 (cột mới đều NULL); DB tạo mới từ `schema.sql` đã có sẵn các cột này.
 
+**Migration A3.12 — gợi ý nhiều nghĩa + tìm & thay thế + từ điển cá nhân
+(idempotent, chạy lại an toàn):**
+
+```bash
+sqlcmd -S localhost -E -C -b -f 65001 -i database/migrate_glossary_revisions.sql
+sqlcmd -S localhost -E -C -b -f 65001 -i database/migrate_dictionary_words.sql
+```
+
+- `StoryGlossary(Id, StoryId, FindText, ReplaceText, MatchCase, WholeWord,
+  ApplyToFuture, CreatedAt)` — quy tắc "Tìm & thay thế" riêng của từng truyện
+  (FK Stories, ON DELETE CASCADE).
+- `ChapterRevisions(Id, ChapterId, StoryId, Title, Content, BatchId, CreatedAt)` —
+  snapshot chương trước lần thay thế gần nhất của mỗi truyện (dùng cho
+  `POST /stories/{id}/replace/undo`).
+- `DictionaryWords(Id, UserId, Zh, Vi, Tags, CreatedAt)` — sổ theo dõi từ điển
+  cá nhân (`POST/GET/DELETE /dictionary/names`); từ dịch thật vẫn nằm trong
+  `dictionaries/names.txt`.
+
+Endpoint mới: `POST /chapters/{id}/retranslate` (dịch lại có marker, không tự
+lưu), `GET /chapters/{id}?raw=1` (bản thô có marker — chỉ chủ truyện),
+`POST /stories/{id}/replace`, `POST /stories/{id}/replace/undo`,
+`GET /stories/{id}/glossary`, `DELETE /stories/{id}/glossary/{ruleId}`,
+`POST/GET/DELETE /dictionary/names`.
+
+**Migration A3.13 — mức gợi ý nhiều nghĩa + nghĩa theo truyện (idempotent):**
+
+```bash
+sqlcmd -S localhost -E -C -b -f 65001 -i database/migrate_story_words.sql
+```
+
+- `StoryWordChoices(StoryId, SourceKey, ChosenText)` — "Luôn dùng nghĩa này"
+  của riêng truyện; `StoryIgnoredWords(StoryId, SourceKey)` — "Không hỏi lại"
+  của riêng truyện (khác file chung `no_mark.txt`).
+- `.env` thêm `MARK_LEVEL=low|medium|high` — mức gợi ý mặc định (trần 15/40/∞);
+  client ghi đè qua body `{ "markLevel": ... }` khi retranslate/import.
+- 3 danh sách mới cạnh `vietphrase.txt`: `ambiguous.txt` (luôn đánh dấu),
+  `no_mark.txt` (trợ từ/lượng từ — không đánh dấu), `synonyms.txt` (loại ở
+  mức medium). Sửa file → tự nạp khi mtime đổi, hoặc
+  `POST /dictionary/mark-lists/reload`.
+
+Endpoint A3.13: `POST /stories/{id}/markers/resolve-all` (lấy nghĩa đầu cả
+truyện, snapshot để undo), `GET/POST/DELETE /stories/{id}/word-choices`,
+`GET/POST/DELETE /stories/{id}/ignored-words` (`sourceKey` hoặc `meanings`),
+`POST /dictionary/mark-lists/reload`.
+
+Quy tắc học từ hành vi (`UserMarkRules`, bảng chung theo người dùng):
+bỏ qua 1 từ đủ `LEARN_SKIP_THRESHOLD` (5) lượt → khóa hết marker ở mọi
+truyện. `GET /me/mark-rules` trả kèm `meanings` (nghĩa tra từ từ điển) —
+màn Quy tắc chỉ hiển thị nghĩa, không lộ khóa chữ Trung;
+`DELETE /me/mark-rules/{ruleId}` xoá 1 quy tắc. Sửa từ điển xong gọi
+`POST /dictionary/names/reload` để meanings mới nhất, không cần restart.
+
 Làm lại từ đầu (chỉ khi chắc chắn, sẽ xoá toàn bộ dữ liệu):
 
 ```bash
@@ -174,7 +226,7 @@ Ngoài ra có thể test trực tiếp trên http://127.0.0.1:8000/docs (nhấn 
 - `pageSize` mặc định 12 (truyện) / 50 (chương), tối đa 100 / 200.
 - Model `Story` trả về: `{ id, title, author, authorId, coverUrl, description, genres[], status, rating, chapterCount, isDraft, updatedAt }` — `genres` là mảng tên thể loại; `authorId` + `isDraft` là trường thêm ngoài Phần B, phục vụ Bước 9/10.
 - **Bước 10 (nhập truyện từ link)**: worker nằm ở `app/services/` — `scraper.py`
-  (adapter theo domain: Qidian / B.faloo / Fanqie + nguồn demo
+  (adapter theo domain: Qidian + nguồn demo
   `demo.vietread.local` fixture không cần mạng), `translator.py` (dịch theo đoạn,
   chuỗi endpoint dự phòng — endpoint lỗi ≥2 lần tự tạm nghỉ rồi tự quay lại
   (5 phút với lỗi thường, hết quota thì nghỉ tới đúng lúc API báo hồi — tối đa
@@ -190,9 +242,7 @@ Ngoài ra có thể test trực tiếp trên http://127.0.0.1:8000/docs (nhấn 
   Thêm tên riêng cho từ điển khi đang chạy: `POST /dictionary/names {"zh","vi"}`
 - Trạng thái nguồn thật (kiểm tra live): **Qidian** ✅ — adapter rewrite
   `www.qidian.com` (bị anti-bot HTTP 202) về `m.qidian.com` + lấy catalog đủ
-  chương, chương VIP → Failed "nội dung trả phí"; **Fanqie** ⚠️ — nội dung mã hoá
-  font anti-scrape (ký tự PUA) → Failed "chưa giải mã được"; **Faloo** ⚠️ — trang
-  chương yêu cầu đăng nhập → Failed "cần đăng nhập"; `demo.vietread.local` ✅ —
+  chương, chương VIP → Failed "nội dung trả phí"; `demo.vietread.local` ✅ —
   fixture không cần mạng (dùng cho test/demo).
 - **Thêm chương vào truyện đã có** (`app/routers/chapter_import.py`): chỉ chủ
   truyện (không tồn tại → 404, khác chủ → 403); link phải thuộc `qidian.com`
@@ -233,7 +283,13 @@ cd backend
 .venv/bin/python test_api.py                # Linux/macOS
 ```
 
-Chạy xong in `TẤT CẢ 145 KIỂM TRA ĐỀU PASS` (exit code 0); script tự tạo và tự xoá dữ liệu kiểm thử.
+Chạy xong in `TẤT CẢ 326 KIỂM TRA ĐỀU PASS` (exit code 0); script tự tạo và tự xoá dữ liệu kiểm thử.
+
+Bộ lọc marker riêng (không cần server): `test_marking.py` (80 kiểm tra)
+và `test_alternatives.py` (55 kiểm tra) — cùng in `TẤT CẢ ... ĐỀU PASS`.
+Golden test dịch (không cần server, khớp từng byte 3 mức low/medium/high):
+`test_golden_translate.py` (10 kiểm tra, dữ liệu trong `tests_golden/`,
+tái sinh bằng `_make_golden.py` khi đổi dữ liệu từ điển có chủ đích).
 
 > Trong đó check import bản demo (`job → Done`) và check thêm chương bằng link
 > Qidian thật cần có mạng (cào nguồn); các check còn lại chạy được offline

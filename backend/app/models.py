@@ -133,6 +133,194 @@ class Chapter(Base):
     )
 
 
+class StoryGlossary(Base):
+    """Quy tắc "Tìm & thay thế" riêng của MỘT truyện (chỉ tác giả thao tác).
+
+    `ApplyToFuture=1` → tự áp dụng cho chương thêm sau này của truyện đó.
+    Xoá truyện thì xoá kèm (ON DELETE CASCADE).
+    """
+
+    __tablename__ = "StoryGlossary"
+
+    id: Mapped[int] = mapped_column("Id", Integer, primary_key=True, autoincrement=True)
+    story_id: Mapped[int] = mapped_column(
+        "StoryId", Integer, ForeignKey("Stories.Id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    find_text: Mapped[str] = mapped_column("FindText", Unicode(200), nullable=False)
+    replace_text: Mapped[str] = mapped_column("ReplaceText", Unicode(200), nullable=False)
+    match_case: Mapped[bool] = mapped_column(
+        "MatchCase", Boolean, nullable=False, default=False
+    )
+    whole_word: Mapped[bool] = mapped_column(
+        "WholeWord", Boolean, nullable=False, default=False
+    )
+    apply_to_future: Mapped[bool] = mapped_column(
+        "ApplyToFuture", Boolean, nullable=False, default=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        "CreatedAt", DateTime, nullable=False, server_default=_utc_now_db()
+    )
+
+
+class ChapterRevision(Base):
+    """Snapshot chương TRƯỚC một lần tìm & thay thế — để hoàn tác batch gần nhất.
+
+    Mỗi truyện giữ tối đa 1 batch: batch mới xoá batch cũ. `CreatedAt` là mốc
+    thời gian của batch — chương nào `UpdatedAt > CreatedAt` nghĩa là đã bị sửa
+    tiếp sau batch → bỏ qua khi hoàn tác (giống ghi chú FK trong schema.sql).
+    """
+
+    __tablename__ = "ChapterRevisions"
+
+    id: Mapped[int] = mapped_column("Id", Integer, primary_key=True, autoincrement=True)
+    # FK ChapterId cố tình KHÔNG cascade (giống Comments) — xoá chương thì xoá
+    # revision trong code để không tạo 2 đường cascade từ Stories.
+    chapter_id: Mapped[int] = mapped_column(
+        "ChapterId", Integer, ForeignKey("Chapters.Id"), nullable=False, index=True
+    )
+    story_id: Mapped[int] = mapped_column(
+        "StoryId", Integer, ForeignKey("Stories.Id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    title: Mapped[str] = mapped_column("Title", Unicode(255), nullable=False)
+    content: Mapped[str] = mapped_column("Content", UnicodeText, nullable=False)
+    batch_id: Mapped[str] = mapped_column("BatchId", Unicode(36), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        "CreatedAt", DateTime, nullable=False, server_default=_utc_now_db()
+    )
+
+
+class DictionaryWord(Base):
+    """Từ điển cá nhân — mỗi từ người dùng thêm qua POST /dictionary/names.
+
+    Từ điển dịch thật vẫn nằm trong `dictionaries/names.txt` (vietphrase nạp
+    vào bộ nhớ); bảng này là sổ theo dõi để app liệt kê / xoá từ của mình.
+    """
+
+    __tablename__ = "DictionaryWords"
+    __table_args__ = (
+        UniqueConstraint("UserId", "Zh", name="UQ_DictionaryWords_UserId_Zh"),
+    )
+
+    id: Mapped[int] = mapped_column("Id", Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        "UserId", Integer, ForeignKey("Users.Id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    zh: Mapped[str] = mapped_column("Zh", Unicode(100), nullable=False)
+    vi: Mapped[str] = mapped_column("Vi", Unicode(200), nullable=False)
+    # Tags tuỳ chọn ("tên riêng, sư huynh") — phân cách bằng dấu phẩy
+    tags: Mapped[str | None] = mapped_column("Tags", Unicode(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        "CreatedAt", DateTime, nullable=False, server_default=_utc_now_db()
+    )
+
+
+class StoryWordChoice(Base):
+    """""Luôn dùng nghĩa này cho truyện này" — khóa Trung → nghĩa đã chọn.
+
+    Người đăng chọn nghĩa trong sheet marker của bộ truyện này; lần dịch sau
+    của TRUYỆN NÀY tự dùng nghĩa đó (không tạo marker). Khóa chung với
+    `StoryIgnoredWords` nhưng cột khác chức năng. Xoá truyện → xoá kèm.
+    """
+
+    __tablename__ = "StoryWordChoices"
+    __table_args__ = (
+        UniqueConstraint("StoryId", "SourceKey", name="UQ_StoryWordChoices_StoryId_SourceKey"),
+    )
+
+    id: Mapped[int] = mapped_column("Id", Integer, primary_key=True, autoincrement=True)
+    story_id: Mapped[int] = mapped_column(
+        "StoryId", Integer, ForeignKey("Stories.Id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    source_key: Mapped[str] = mapped_column("SourceKey", Unicode(200), nullable=False)
+    chosen_text: Mapped[str] = mapped_column("ChosenText", Unicode(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        "CreatedAt", DateTime, nullable=False, server_default=_utc_now_db()
+    )
+
+
+class StoryIgnoredWord(Base):
+    """""Không hỏi lại từ này" — khóa bỏ marker của RIÊNG bộ truyện.
+
+    Khác file chung `no_mark.txt` (toàn hệ thống): bảng này chỉ tác động tới
+    bộ truyện sở hữu. Xoá truyện → xoá kèm.
+    """
+
+    __tablename__ = "StoryIgnoredWords"
+    __table_args__ = (
+        UniqueConstraint("StoryId", "SourceKey", name="UQ_StoryIgnoredWords_StoryId_SourceKey"),
+    )
+
+    id: Mapped[int] = mapped_column("Id", Integer, primary_key=True, autoincrement=True)
+    story_id: Mapped[int] = mapped_column(
+        "StoryId", Integer, ForeignKey("Stories.Id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    source_key: Mapped[str] = mapped_column("SourceKey", Unicode(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        "CreatedAt", DateTime, nullable=False, server_default=_utc_now_db()
+    )
+
+
+class UserWordStat(Base):
+    """Thống kê hành vi "không hỏi lại" của MỘT người dùng theo khóa.
+
+    Mỗi lần người dùng bấm "Không hỏi lại từ này" (bất kỳ truyện nào) →
+    ``SkipCount`` +1 cho khóa đó. Đủ ``LEARN_SKIP_THRESHOLD`` lần (env,
+    mặc định 5; <=0 = tắt học) → ghi một ``UserMarkRule``: khóa không marker
+    nữa ở MỌI truyện của người này. Unique (UserId, SourceKey) nên thống kê
+    gộp mọi truyện. Xoá người dùng → xoá kèm.
+    """
+
+    __tablename__ = "UserWordStats"
+    __table_args__ = (
+        UniqueConstraint("UserId", "SourceKey", name="UQ_UserWordStats_UserId_SourceKey"),
+    )
+
+    id: Mapped[int] = mapped_column("Id", Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        "UserId", Integer, ForeignKey("Users.Id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    source_key: Mapped[str] = mapped_column("SourceKey", Unicode(200), nullable=False)
+    skip_count: Mapped[int] = mapped_column(
+        "SkipCount", Integer, nullable=False, default=1
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        "UpdatedAt", DateTime, nullable=False, server_default=_utc_now_db(),
+        onupdate=_utc_now_db(),
+    )
+
+
+class UserMarkRule(Base):
+    """Quy tắc học từ hành vi người đăng — khoá hết marker sau đủ lượt bỏ qua.
+
+    Khác ``StoryIgnoredWords`` (theo truyện, bấm 1 lần là có hiệu lực ngay):
+    quy tắc này của RIÊNG người dùng và áp cho mọi truyện; chỉ sinh ra khi
+    ``UserWordStats.SkipCount`` chạm ``LEARN_SKIP_THRESHOLD``. Xoá quy tắc
+    (màn Quy tắc) → marker trở lại. ``SkipCount`` lưu lúc học để hiển thị.
+    """
+
+    __tablename__ = "UserMarkRules"
+    __table_args__ = (
+        UniqueConstraint("UserId", "SourceKey", name="UQ_UserMarkRules_UserId_SourceKey"),
+    )
+
+    id: Mapped[int] = mapped_column("Id", Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        "UserId", Integer, ForeignKey("Users.Id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    source_key: Mapped[str] = mapped_column("SourceKey", Unicode(200), nullable=False)
+    skip_count: Mapped[int] = mapped_column("SkipCount", Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        "CreatedAt", DateTime, nullable=False, server_default=_utc_now_db()
+    )
+
+
 class Comment(Base):
     """Bình luận theo truyện, hoặc theo chương nếu ChapterId khác NULL."""
 

@@ -65,6 +65,19 @@ def require_owner(story: Story, user: User) -> None:
         raise HTTPException(status_code=403, detail="Bạn không có quyền thao tác trên truyện này")
 
 
+def get_owned_story(db: Session, story_id: int, user: User) -> Story:
+    """Lấy truyện để thao tác của CHỦ truyện: không tồn tại → 404, khác chủ → 403.
+
+    Dùng chung cho mọi endpoint sửa/thêm/xoá theo truyện (chapters,
+    chapter_import, glossary, markers) — trước đây bị nhân bản ở 4 router.
+    """
+    story = db.get(Story, story_id)
+    if story is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy truyện")
+    require_owner(story, user)
+    return story
+
+
 def story_outs(db: Session, stories: list[Story]) -> list[StoryOut]:
     """Ghép truyện với tên tác giả, danh sách thể loại, số chương (không N+1)."""
     if not stories:

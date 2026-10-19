@@ -30,3 +30,40 @@ Quy tắc chung:
   `vietphrase.txt`/`hanviet.txt` bằng tay thì sửa file rồi restart (hoặc xoá `_cache.pkl`).
 - Dấu câu full-width (，。！？：；“”「」（）……) được đổi sang dạng Việt/ASCII;
   chữ đầu câu/đoạn và tên riêng được viết hoa.
+
+---
+
+## Danh sách marker nhiều nghĩa (`marking.py`)
+
+Ba file người dùng + hai file seed **đóng gói kèm repo** quyết định một mục
+đa nghĩa có thành marker `{nghĩa1|nghĩa2}` hay tự lấy nghĩa đầu. **Toàn bộ
+phân loại là luật offline — không AI, không gọi mạng** (khóa phân loại do
+người viết chắt lọc, không có công cụ sinh file gợi ý tự động).
+
+| File | Vai trò | Người dùng hay seed thắng? |
+|---|---|---|
+| `no_mark.txt` | Đen tuyệt đối: trợ từ, lượng từ, liên từ — không bao giờ marker | Người dùng (không có seed) |
+| `ambiguous.txt` | Trắng: khóa đa nghĩa thật sự — luôn marker ở mức Ít/Vừa | **Người dùng thắng** |
+| `ambiguous.seed.txt` | Trắng đóng gói (~240 khóa viết tay: 打 行 开 过 意思 东西 方便 厉害…) | Nạp tiếp khi `ambiguous.txt` không có khóa |
+| `synonyms.txt` | Đen: khóa các nghĩa chỉ là đồng nghĩa — không marker | **Người dùng thắng** |
+| `synonyms.seed.txt` | Đen đóng gói (~120 khóa viết tay, lấy cả từ chương Qidian thật) | Nạp tiếp khi `synonyms.txt` không có khóa |
+
+Quy tắc gộp trong `reload_lists()` (người dùng thắng khi mâu thuẫn):
+
+```
+ambiguous = ambiguous.txt  ∪  (ambiguous.seed.txt − synonyms.txt − no_mark.txt)
+synonyms  = synonyms.txt   ∪  (synonyms.seed.txt  − ambiguous.txt − no_mark.txt)
+```
+
+- **Format chung cho cả 5 file**: mỗi dòng MỘT khóa chữ Trung, UTF-8 (hoặc
+  UTF-16 theo BOM), dòng bắt đầu bằng `#` là chú thích, dòng trống bị bỏ qua.
+- **Sửa file không cần restart**: `marking.get_lists()` tự nạp khi mtime đổi,
+  hoặc bấm `POST /dictionary/mark-lists/reload` (cache phân loại theo khóa
+  cũng xoá khi nạp lại).
+- File thiếu hoặc rỗng → coi như danh sách rỗng, **không lỗi** (mức Ít khi
+  cả seed lẫn file người dùng trống sẽ dùng bộ lọc nghiêm ngặt thay vì whitelist).
+- Khóa có luật cũ `{a:b}` viết tay trong `vietphrase.txt` (一顿 不为 为 定为 当等)
+  luôn được coi như nằm trong `ambiguous.txt`.
+- Tạo lại seed (kiểm chứng against từ điển cục bộ, không mạng):
+  `PYTHONUTF8=1 .venv/Scripts/python.exe _gen_seeds.py` — chỉ chạy khi muốn
+  regenerate; file đã commit, không cần chạy lại khi khởi động.

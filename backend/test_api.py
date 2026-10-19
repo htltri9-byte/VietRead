@@ -7,10 +7,13 @@ Cách dùng (server phải đang chạy):
 
 from __future__ import annotations
 
+import re
 import sys
 import time
 
 import httpx
+
+from app import alternatives, vietphrase  # parser marker + tra ngược nghĩa → khóa
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000"
 client = httpx.Client(base_url=BASE, timeout=20)
@@ -564,7 +567,830 @@ check("truyện có 4 chương sau khi thêm (1 link + 3 text)",
 r = client.delete(f"/stories/{imp_sid}", headers=auth(tac_gia))
 check("dọn truyện kiểm thử thêm chương", r.status_code == 200, r.text)
 
+print("\n=== GỢI Ý NHIỀU NGHĨA (marker) — bản thô chỉ chủ truyện thấy ===")
+
+
+def resolve_markers(text: str) -> str:
+    """Gỡ marker về nghĩa đầu — dùng thẳng app/alternatives.py
+
+    (khớp mọi dạng: {a|b} chuẩn, dữ liệu cũ {中文|a|b} và cũ {a:b}).
+    """
+    return alternatives.resolve(text)
+
+
+# Dọn quy tắc 见過 sót từ lần chạy trước (run bị ngắt có thể để lại quy tắc
+# học — nó sẽ suppress marker 见过 ở phần kiểm thử ngay bên dưới).
+r = client.get("/me/mark-rules", headers=auth(tac_gia))
+for stale in r.json():
+    client.delete(f"/me/mark-rules/{stale['id']}", headers=auth(tac_gia))
+
+r = client.post("/stories", json={"title": "Truyện Kiểm Thử Marker B12"},
+                headers=auth(tac_gia))
+check("tạo truyện kiểm thử marker", r.status_code == 200, r.text)
+mk_sid = r.json()["id"]
+
+r = client.post(f"/stories/{mk_sid}/chapters/import-text",
+                json={"text": "他为你而来，定为此子，见过此人。", "sourceLang": "zh",
+                      "title": "Chương marker"}, headers=auth(tac_gia))
+check("import-text zh = 200", r.status_code == 200, r.text)
+mk_ch = r.json()
+raw = mk_ch["content"]
+markers = re.findall(r"\{[^{}]+\}", raw)
+check("bản thô có marker {...}", len(markers) >= 1, raw[:120])
+check("mỗi marker ≥ 2 nghĩa và ≤ 6 nghĩa (mọi phần tử là tiếng Việt)",
+      all(2 <= len(m.meanings) <= 6 for m in alternatives.parse(raw)),
+      str(markers))
+check("MỌI marker trong bản thô không chứa ký tự CJK",
+      all(not alternatives.has_cjk(mk) for mk in markers), raw[:200])
+
+r = client.get(f"/chapters/{mk_ch['id']}")
+check("GET /chapters (khách) = 200", r.status_code == 200, r.text)
+reader_text = r.json()["content"]
+check("người đọc KHÔNG thấy dấu {}", "{" not in reader_text, reader_text[:120])
+check("bản đọc = bản thô đã resolve (nghĩa đầu)",
+      reader_text == resolve_markers(raw),
+      f"{reader_text[:80]!r} vs {resolve_markers(raw)[:80]!r}")
+
+check("raw=1 chưa đăng nhập → 401",
+      client.get(f"/chapters/{mk_ch['id']}", params={"raw": "1"}).status_code == 401)
+r = client.get(f"/chapters/{mk_ch['id']}", params={"raw": "1"}, headers=auth(doc_gia))
+check("raw=1 người khác → 403 {message}",
+      r.status_code == 403 and "message" in r.json(), r.text)
+r = client.get(f"/chapters/{mk_ch['id']}", params={"raw": "1"}, headers=auth(tac_gia))
+check("raw=1 chủ truyện → bản thô giữ marker",
+      r.status_code == 200 and "{" in r.json()["content"], r.text)
+
+# --- Dịch lại có gợi ý nghĩa (KHÔNG tự lưu) ---
+r = client.post(f"/chapters/{mk_ch['id']}/retranslate")
+check("retranslate chưa đăng nhập → 401", r.status_code == 401, r.text)
+r = client.post(f"/chapters/{mk_ch['id']}/retranslate", headers=auth(doc_gia))
+check("retranslate người khác → 403 {message}",
+      r.status_code == 403 and "message" in r.json(), r.text)
+r = client.post(f"/chapters/{mk_ch['id']}/retranslate", headers=auth(tac_gia))
+check("retranslate = 200 {chapterId, content}",
+      r.status_code == 200 and {"chapterId", "content"} <= set(r.json()), r.text)
+check("nội dung dịch lại có marker", "{" in r.json()["content"],
+      r.json()["content"][:80])
+check("retranslate KHÔNG tự lưu",
+      client.get(f"/chapters/{mk_ch['id']}", params={"raw": "1"},
+                 headers=auth(tac_gia)).json()["content"] == raw)
+# Chương tạo tay không có OriginalContent → 400 (dùng truyện mới để không đụng seed)
+r = client.post("/stories", json={"title": "Truyện Kiểm Thử Không Gốc B12b"},
+                headers=auth(tac_gia))
+norig_sid = r.json()["id"]
+r = client.post(f"/stories/{norig_sid}/chapters",
+                json={"title": "Chương 1", "content": "Nội dung gõ tay."},
+                headers=auth(tac_gia))
+norig_ch = r.json()
+r = client.post(f"/chapters/{norig_ch['id']}/retranslate", headers=auth(tac_gia))
+check("retranslate chương không có bản gốc → 400 {message}",
+      r.status_code == 400 and "bản gốc" in r.json()["message"], r.text)
+check("dọn truyện không gốc",
+      client.delete(f"/stories/{norig_sid}", headers=auth(tac_gia)).status_code == 200)
+
+print("\n=== TÌM & THAY THẾ THEO TRUYỆN — /replace + /undo + /glossary ===")
+
+r = client.post("/stories", json={"title": "Truyện Kiểm Thử Thay Thế B13"},
+                headers=auth(tac_gia))
+check("tạo truyện kiểm thử thay thế", r.status_code == 200, r.text)
+rp_sid = r.json()["id"]
+
+rp_seed = [
+    ("Chương 1: Lý Minh luyện kiếm", "Lý Minh ngồi thiền. Lý Minh mở mắt."),
+    ("Chương 2: Trở về", "lý minh đi về. Có Lý Minh ở đây. Minh Minhsson đến."),
+    ("Chương 3: Không tên", "Một chương không có tên riêng."),
+]
+rp_chs = []
+for title, content in rp_seed:
+    r = client.post(f"/stories/{rp_sid}/chapters",
+                    json={"title": title, "content": content}, headers=auth(tac_gia))
+    check(f"tạo chương: {title}", r.status_code == 200, r.text)
+    rp_chs.append(r.json())
+
+# Bản gốc của MỘT TRUYỆN KHÁC (truyện seed) — kiểm chứng không bị ảnh hưởng
+seed_ch0 = client.get(f"/stories/{seed['id']}/chapters").json()[0]
+seed_before = client.get(f"/chapters/{seed_ch0['id']}").json()["content"]
+
+# --- Quyền + validate ---
+check("replace chưa đăng nhập → 401",
+      client.post(f"/stories/{rp_sid}/replace",
+                  json={"find": "a", "replace": "b"}).status_code == 401)
+r = client.post(f"/stories/{rp_sid}/replace", json={"find": "a", "replace": "b"},
+                headers=auth(doc_gia))
+check("replace người khác → 403 {message}",
+      r.status_code == 403 and "message" in r.json(), r.text)
+r = client.post("/stories/999999/replace", json={"find": "a", "replace": "b"},
+                headers=auth(tac_gia))
+check("replace truyện không tồn tại → 404 {message}",
+      r.status_code == 404 and "message" in r.json(), r.text)
+r = client.post(f"/stories/{rp_sid}/replace", json={"find": "  ", "replace": "b"},
+                headers=auth(tac_gia))
+check("find rỗng → 400", r.status_code == 400 and "message" in r.json(), r.text)
+r = client.post(f"/stories/{rp_sid}/replace",
+                json={"find": "a" * 201, "replace": "b"}, headers=auth(tac_gia))
+check("find dài quá 200 ký tự → 400", r.status_code == 400, r.text)
+r = client.post(f"/stories/{rp_sid}/replace",
+                json={"find": "Lý Minh", "replace": "Lý Minh"},
+                headers=auth(tac_gia))
+check("find trùng replace → 400", r.status_code == 400 and "message" in r.json(), r.text)
+
+# --- dryRun: đếm chỗ + đếm chương, không ghi gì ---
+r = client.post(f"/stories/{rp_sid}/replace",
+                json={"find": "Lý Minh", "replace": "Trần Lễ", "dryRun": True},
+                headers=auth(tac_gia))
+data = r.json()
+check("dryRun trả đúng {dryRun, totalMatches, chapters}",
+      r.status_code == 200 and set(data) == {"dryRun", "totalMatches", "chapters"},
+      str(data))
+check("dryRun: matchCase=false → 4 chỗ / 2 chương",
+      data["totalMatches"] == 4 and len(data["chapters"]) == 2
+      and [c["matches"] for c in data["chapters"]] == [2, 2], str(data))
+check("dryRun: chương 3 không khớp không đưa vào",
+      all(c["chapterNo"] in (1, 2) for c in data["chapters"]), str(data))
+check("dryRun không ghi gì",
+      client.get(f"/chapters/{rp_chs[0]['id']}", headers=auth(tac_gia))
+      .json()["content"] == rp_seed[0][1])
+
+r = client.post(f"/stories/{rp_sid}/replace",
+                json={"find": "Lý Minh", "replace": "Trần Lễ", "dryRun": True,
+                      "includeTitles": True}, headers=auth(tac_gia))
+check("dryRun includeTitles: 5 chỗ (chương 1 + 3)",
+      r.json()["totalMatches"] == 5
+      and [c["matches"] for c in r.json()["chapters"]] == [3, 2], r.text)
+
+# wholeWord: "Minh" không khớp đầu "Minhsson" (chương 1: 2, chương 2: 2)
+r = client.post(f"/stories/{rp_sid}/replace",
+                json={"find": "Minh", "replace": "X", "dryRun": True,
+                      "matchCase": True, "wholeWord": True}, headers=auth(tac_gia))
+check("dryRun wholeWord=true → 4 chỗ (không khớp đầu 'Minhsson')",
+      r.json()["totalMatches"] == 4, r.text)
+r = client.post(f"/stories/{rp_sid}/replace",
+                json={"find": "Minh", "replace": "X", "dryRun": True,
+                      "matchCase": True, "wholeWord": False}, headers=auth(tac_gia))
+check("dryRun wholeWord=false → 5 chỗ (kể cả đầu 'Minhsson')",
+      r.json()["totalMatches"] == 5, r.text)
+
+# --- Thay thật (một transaction) ---
+r = client.post(f"/stories/{rp_sid}/replace",
+                json={"find": "Lý Minh", "replace": "Trần Lễ", "matchCase": True,
+                      "includeTitles": True, "applyToFuture": True},
+                headers=auth(tac_gia))
+data = r.json()
+check("thay thật = 200 có batchId + chaptersChanged",
+      r.status_code == 200 and data.get("batchId")
+      and data["chaptersChanged"] == 2 and data["totalMatches"] == 4, str(data))
+batch1 = data["batchId"]
+
+r = client.get(f"/stories/{rp_sid}/chapters", headers=auth(tac_gia))
+after = {c["index"]: client.get(f"/chapters/{c['id']}", headers=auth(tac_gia)).json()
+         for c in r.json()}
+check("chương 1: nội dung + tên chương đều được thay",
+      after[1]["content"] == "Trần Lễ ngồi thiền. Trần Lễ mở mắt."
+      and after[1]["title"] == "Chương 1: Trần Lễ luyện kiếm", str(after[1]))
+check("chương 2: matchCase=true giữ nguyên 'lý minh' thường",
+      after[2]["content"] == "lý minh đi về. Có Trần Lễ ở đây. Minh Minhsson đến.",
+      str(after[2]["content"]))
+check("chương 3: không có chỗ nào khớp thì giữ nguyên",
+      after[3]["content"] == rp_seed[2][1], str(after[3]["content"]))
+check("truyện khác không bị ảnh hưởng",
+      client.get(f"/chapters/{seed_ch0['id']}").json()["content"] == seed_before)
+
+# --- Quy tắc ApplyToFuture ---
+r = client.get(f"/stories/{rp_sid}/glossary", headers=auth(tac_gia))
+check("GET /glossary = 200 có 1 quy tắc",
+      r.status_code == 200 and len(r.json()) == 1, r.text)
+rule = r.json()[0]
+check("quy tắc đúng A → B + cờ",
+      rule["findText"] == "Lý Minh" and rule["replaceText"] == "Trần Lễ"
+      and rule["matchCase"] is True and rule["applyToFuture"] is True, str(rule))
+check("GET /glossary người khác → 403",
+      client.get(f"/stories/{rp_sid}/glossary", headers=auth(doc_gia)).status_code == 403)
+
+r = client.post(f"/stories/{rp_sid}/chapters",
+                json={"title": "Chương 4", "content": "Lý Minh xuất hiện lần nữa."},
+                headers=auth(tac_gia))
+check("chương mới trong truyện bị áp quy tắc ApplyToFuture",
+      r.status_code == 200 and r.json()["content"] == "Trần Lễ xuất hiện lần nữa.",
+      r.text)
+
+r = client.post(f"/stories/{mk_sid}/chapters",
+                json={"title": "Chương khác", "content": "Lý Minh không thuộc truyện này."},
+                headers=auth(tac_gia))
+check("truyện KHÁC không bị áp quy tắc",
+      r.status_code == 200 and r.json()["content"] == "Lý Minh không thuộc truyện này.",
+      r.text)
+
+# --- Hoàn tác ---
+r = client.post(f"/stories/{rp_sid}/replace/undo")
+check("undo chưa đăng nhập → 401", r.status_code == 401, r.text)
+r = client.post(f"/stories/{rp_sid}/replace/undo", headers=auth(doc_gia))
+check("undo người khác → 403", r.status_code == 403, r.text)
+r = client.post(f"/stories/{rp_sid}/replace/undo", headers=auth(tac_gia))
+check("undo = 200 {message, restored, skipped}",
+      r.status_code == 200 and {"message", "restored", "skipped"} <= set(r.json()),
+      r.text)
+check("undo khôi phục 2 chương, bỏ qua 0",
+      r.json()["restored"] == 2 and r.json()["skipped"] == 0, r.text)
+restored = {c["index"]: client.get(f"/chapters/{c['id']}", headers=auth(tac_gia)).json()
+            for c in client.get(f"/stories/{rp_sid}/chapters",
+                                headers=auth(tac_gia)).json()}
+check("nội dung + tên chương sau undo đúng bản cũ",
+      restored[1]["content"] == rp_seed[0][1]
+      and restored[1]["title"] == rp_seed[0][0]
+      and restored[2]["content"] == rp_seed[1][1], str(restored[1]))
+check("chương 4 (thêm sau khi có quy tắc) không bị undo đụng tới",
+      restored[4]["content"] == "Trần Lễ xuất hiện lần nữa.", str(restored[4]))
+r = client.post(f"/stories/{rp_sid}/replace/undo", headers=auth(tac_gia))
+check("undo lần nữa → 400 (đã tiêu thụ batch)",
+      r.status_code == 400 and "message" in r.json(), r.text)
+
+# --- Chương bị sửa sau batch → bỏ qua khi undo ---
+r = client.post(f"/stories/{rp_sid}/replace",
+                json={"find": "Lý Minh", "replace": "Trần Lễ", "matchCase": True},
+                headers=auth(tac_gia))
+check("thay lần 2 = 200 có batchId mới",
+      r.status_code == 200 and r.json()["batchId"] and r.json()["batchId"] != batch1,
+      r.text)
+r = client.put(f"/chapters/{rp_chs[0]['id']}",
+               json={"content": "Người dùng sửa tay sau khi thay."},
+               headers=auth(tac_gia))
+check("sửa tay chương 1 sau batch", r.status_code == 200, r.text)
+r = client.post(f"/stories/{rp_sid}/replace/undo", headers=auth(tac_gia))
+check("undo: chương đã sửa tiếp bị bỏ qua (restored=1, skipped=1)",
+      r.status_code == 200 and r.json()["restored"] == 1
+      and r.json()["skipped"] == 1, r.text)
+check("chương sửa tay giữ nguyên nội dung người dùng",
+      client.get(f"/chapters/{rp_chs[0]['id']}", headers=auth(tac_gia))
+      .json()["content"] == "Người dùng sửa tay sau khi thay.")
+check("chương 2 được hoàn tác về bản gốc",
+      client.get(f"/chapters/{rp_chs[1]['id']}", headers=auth(tac_gia))
+      .json()["content"] == rp_seed[1][1])
+
+# --- Quy tắc: xoá ---
+rule_id = client.get(f"/stories/{rp_sid}/glossary", headers=auth(tac_gia)).json()[0]["id"]
+r = client.delete(f"/stories/{mk_sid}/glossary/{rule_id}", headers=auth(tac_gia))
+check("xoá quy tắc của truyện khác → 404", r.status_code == 404, r.text)
+r = client.delete(f"/stories/{rp_sid}/glossary/{rule_id}", headers=auth(doc_gia))
+check("xoá quy tắc người khác → 403", r.status_code == 403, r.text)
+r = client.delete(f"/stories/{rp_sid}/glossary/{rule_id}", headers=auth(tac_gia))
+check("DELETE /glossary/{id} = 200", r.status_code == 200 and "message" in r.json(), r.text)
+check("quy tắc đã xoá không còn trong danh sách",
+      client.get(f"/stories/{rp_sid}/glossary", headers=auth(tac_gia)).json() == [])
+check("xoá lại → 404",
+      client.delete(f"/stories/{rp_sid}/glossary/{rule_id}",
+                    headers=auth(tac_gia)).status_code == 404)
+r = client.post(f"/stories/{rp_sid}/chapters",
+                json={"title": "Chương 5", "content": "Lý Minh sau khi xoá quy tắc."},
+                headers=auth(tac_gia))
+check("chương mới sau khi xoá quy tắc không bị thay",
+      r.status_code == 200 and r.json()["content"] == "Lý Minh sau khi xoá quy tắc.",
+      r.text)
+
+# --- Thay cả bên trong marker + không đụng OriginalContent ---
+raw_before = client.get(f"/chapters/{mk_ch['id']}", params={"raw": "1"},
+                        headers=auth(tac_gia)).json()["content"]
+rt_before = client.post(f"/chapters/{mk_ch['id']}/retranslate",
+                        headers=auth(tac_gia)).json()["content"]
+marker = re.search(r"\{([^{}]+)\}", raw_before)
+inner = [p.strip() for p in marker.group(1).split("|") if p.strip()] if marker else []
+check("bản thô có marker ≥2 nghĩa để thay bên trong", len(inner) >= 2, str(inner))
+if len(inner) >= 2:
+    r = client.post(f"/stories/{mk_sid}/replace",
+                    json={"find": inner[1], "replace": "NGHĨA_THAY"},
+                    headers=auth(tac_gia))
+    check("thay được cả bên trong marker (trên bản thô)",
+          r.status_code == 200 and r.json()["totalMatches"] >= 1, r.text)
+    raw_after = client.get(f"/chapters/{mk_ch['id']}", params={"raw": "1"},
+                           headers=auth(tac_gia)).json()["content"]
+    check("vẫn giữ dấu {} sau thay và có nghĩa mới",
+          "{" in raw_after and "NGHĨA_THAY" in raw_after, raw_after[:120])
+    rt_after = client.post(f"/chapters/{mk_ch['id']}/retranslate",
+                           headers=auth(tac_gia)).json()["content"]
+    check("OriginalContent không bị thay thế đụng tới", rt_after == rt_before)
+    r = client.post(f"/stories/{mk_sid}/replace/undo", headers=auth(tac_gia))
+    check("undo trả lại bản thô cũ",
+          r.status_code == 200 and r.json()["restored"] >= 1, r.text)
+    check("bản thô sau undo == trước thay",
+          client.get(f"/chapters/{mk_ch['id']}", params={"raw": "1"},
+                     headers=auth(tac_gia)).json()["content"] == raw_before)
+
+check("dọn truyện marker",
+      client.delete(f"/stories/{mk_sid}", headers=auth(tac_gia)).status_code == 200)
+check("dọn truyện thay thế",
+      client.delete(f"/stories/{rp_sid}", headers=auth(tac_gia)).status_code == 200)
+
+print("\n=== TỪ ĐIỂN CÁ NHÂN — /dictionary/names ===")
+
+# Chạy lại nhiều lần vẫn pass: dọn sạch từ điển của 2 tài khoản kiểm thử
+# trước (dòng thừa của lần chạy trước chỉ xoá được khi chạy lại).
+def _purge_words(user):
+    r = client.get("/dictionary/names", headers=auth(user))
+    for w in (r.json() if r.status_code == 200 else []):
+        client.delete(f"/dictionary/names/{w['id']}", headers=auth(user))
+
+_purge_words(tac_gia)
+_purge_words(doc_gia)
+
+r = client.post("/dictionary/names", json={"zh": "李明", "vi": "Lý Minh"})
+check("POST /dictionary/names chưa đăng nhập → 401 {message}",
+      r.status_code == 401 and "message" in r.json(), r.text)
+check("GET /dictionary/names chưa đăng nhập → 401",
+      client.get("/dictionary/names").status_code == 401)
+
+r = client.post("/dictionary/names",
+                json={"zh": "测试词", "vi": "từ kiểm thử",
+                      "tags": "kiểm thử, mượn từ"}, headers=auth(tac_gia))
+check("POST /dictionary/names = 200 {ok, zh, vi, tags, names}",
+      r.status_code == 200 and r.json()["ok"] is True
+      and r.json()["zh"] == "测试词" and r.json()["vi"] == "từ kiểm thử"
+      and r.json()["tags"] == "kiểm thử,mượn từ" and r.json()["names"] > 0, r.text)
+word = r.json()["word"]
+check("phản hồi có {id, zh, vi, tags, createdAt}",
+      {"id", "zh", "vi", "tags", "createdAt"} <= set(word), str(word))
+
+r = client.post("/dictionary/names", json={"zh": "李明", "vi": "nghĩa khác"},
+                headers=auth(doc_gia))
+check("thêm từ lần đầu của tài khoản → 200",
+      r.status_code == 200 and r.json()["zh"] == "李明", r.text)
+r = client.post("/dictionary/names", json={"zh": "李明", "vi": "nghĩa khác"},
+                headers=auth(doc_gia))
+check("thêm trùng từ trong cùng tài khoản → 400",
+      r.status_code == 400 and "message" in r.json(), r.text)
+
+# Từ mới được dùng để dịch chương nhập sau đó (không cần restart)
+r = client.post("/stories", json={"title": "Truyện Kiểm Thử Từ Điển B14"},
+                headers=auth(tac_gia))
+dict_sid = r.json()["id"]
+r = client.post(f"/stories/{dict_sid}/chapters/import-text",
+                json={"text": "这是测试词。", "sourceLang": "zh"},
+                headers=auth(tac_gia))
+check("chương mới dịch dùng ngay từ vừa thêm",
+      r.status_code == 200
+      and "từ kiểm thử" in r.json()["content"].lower(),
+      r.json().get("content", r.text)[:120])
+
+r = client.get("/dictionary/names", headers=auth(tac_gia))
+check("GET /dictionary/names = 200 có từ vừa thêm",
+      r.status_code == 200 and any(w["zh"] == "测试词" for w in r.json()),
+      r.text[:200])
+check("từ điển của tài khoản khác không thấy từ này",
+      all(w["zh"] != "测试词"
+          for w in client.get("/dictionary/names", headers=auth(doc_gia)).json()))
+check("xoá từ của người khác → 404",
+      client.delete(f"/dictionary/names/{word['id']}",
+                    headers=auth(doc_gia)).status_code == 404)
+
+r = client.delete(f"/dictionary/names/{word['id']}", headers=auth(tac_gia))
+check("DELETE /dictionary/names/{id} = 200 {message}",
+      r.status_code == 200 and "message" in r.json(), r.text)
+check("từ đã xoá không còn trong danh sách",
+      all(w["zh"] != "测试词"
+          for w in client.get("/dictionary/names", headers=auth(tac_gia)).json()))
+r = client.post(f"/stories/{dict_sid}/chapters/import-text",
+                json={"text": "这是测试词。", "sourceLang": "zh"},
+                headers=auth(tac_gia))
+check("sau khi xoá, chương mới không còn dùng nghĩa cũ",
+      r.status_code == 200
+      and "từ kiểm thử" not in r.json()["content"].lower(),
+      r.json().get("content", r.text)[:120])
+check("xoá lại từ đã xoá → 404",
+      client.delete(f"/dictionary/names/{word['id']}",
+                    headers=auth(tac_gia)).status_code == 404)
+check("dọn truyện kiểm thử từ điển",
+      client.delete(f"/stories/{dict_sid}", headers=auth(tac_gia)).status_code == 200)
+
+print("\n=== GỢI Ý NGHĨA: MỨC, NGHĨA ĐÃ CHỌN, KHÔNG HỎI LẠI, RESOLVE-ALL ===")
+
+
+def mk_markers(text: str) -> list[str]:
+    """Mọi marker `{...}` trong văn bản (dữ liệu cũ có thể còn khóa chữ Hán)."""
+    return re.findall(r"\{[^{}]+\}", text)
+
+
+ZH1 = "他见过她三次，似乎很有钱。"  # 见过了 nghĩa (khóa đa chữ) + 似乎 (synonyms.txt)
+ZH2 = "她又见到他。"
+
+r = client.post("/stories", json={"title": "Truyện Kiểm Thử Gợi Ý Nghĩa"},
+                headers=auth(tac_gia))
+check("tạo truyện kiểm thử gợi ý = 200", r.status_code == 200, r.text)
+mk_sid = r.json()["id"]
+
+r = client.post(f"/stories/{mk_sid}/chapters/import-text",
+                json={"text": ZH1, "sourceLang": "zh", "chapterNo": 1},
+                headers=auth(tac_gia))
+check("nhập chương 1 (zh) = 200", r.status_code == 200, r.text)
+mk_ch1 = r.json()["id"]
+r = client.post(f"/stories/{mk_sid}/chapters/import-text",
+                json={"text": ZH2, "sourceLang": "zh", "chapterNo": 2},
+                headers=auth(tac_gia))
+check("nhập chương 2 (zh) = 200", r.status_code == 200, r.text)
+mk_ch2 = r.json()["id"]
+
+r = client.get(f"/chapters/{mk_ch1}?raw=1", headers=auth(tac_gia))
+raw1 = r.json()["content"]
+_mk_raw1 = alternatives.parse(raw1)
+check("raw=1: marker chỉ chứa nghĩa Việt — không còn {见過| khóa Trung",
+      len(_mk_raw1) >= 1
+      and not any(alternatives.has_cjk(m.text) for m in _mk_raw1)
+      and not any(alternatives.has_cjk(x)
+                  for m in _mk_raw1 for x in m.meanings),
+      raw1[:200])
+# Tra ngược từ danh sách nghĩa → khóa 见过 (client mới không gửi khóa chữ Hán)
+_jg = [m for m in _mk_raw1
+       if "见过" in vietphrase.keys_for_meanings(list(m.meanings))]
+check("tra ngược danh sách nghĩa → khóa 见过 (marker nguyên bản)", bool(_jg),
+      str([(m.text, vietphrase.keys_for_meanings(list(m.meanings)))
+           for m in _mk_raw1]))
+JG = _jg[0].text  # marker chuẩn của 见过 — dạng mới, dùng so ở các kiểm tra sau
+check("người đọc không thấy dấu {} (bản resolve)",
+      "{" not in client.get(f"/chapters/{mk_ch1}").json()["content"])
+check("似乎 trong synonyms.txt → không marker ở mức nhập mặc định (low)",
+      not any("似乎" in vietphrase.keys_for_meanings(list(m.meanings))
+              for m in _mk_raw1), raw1[:200])
+
+# --- markLevel: hợp lệ / sai / không gửi body (client cũ) ---
+r = client.post(f"/chapters/{mk_ch1}/retranslate", headers=auth(tac_gia))
+check("retranslate KHÔNG body = 200 (mặc định MARK_LEVEL)",
+      r.status_code == 200 and "content" in r.json(), r.text)
+r = client.post(f"/chapters/{mk_ch1}/retranslate", json={"markLevel": "bogus"},
+                headers=auth(tac_gia))
+check("markLevel sai → 400 có message",
+      r.status_code == 400 and "markLevel" in r.json()["message"], r.text)
+r = client.post(f"/chapters/{mk_ch1}/retranslate", json={"markLevel": "low"},
+                headers=auth(tac_gia))
+n_low = len(mk_markers(r.json()["content"]))
+check(f"mức Ít ≤ 15 marker/chương (thực tế {n_low})",
+      1 <= n_low <= 15, str(n_low))
+r = client.post(f"/chapters/{mk_ch1}/retranslate", json={"markLevel": "high"},
+                headers=auth(tac_gia))
+rt_high_ref = r.json()["content"]  # bản dịch lại mức Nhiều — so lại sau resolve-all
+n_high = len(mk_markers(rt_high_ref))
+check(f"mức Nhiều ≥ mức Ít ({n_high} ≥ {n_low})", n_high >= n_low)
+check("retranslate KHÔNG tự lưu",
+      len(mk_markers(client.get(f"/chapters/{mk_ch1}?raw=1",
+                                headers=auth(tac_gia)).json()["content"]))
+      == len(mk_markers(raw1)))
+r = client.post(f"/chapters/{mk_ch1}/retranslate", json={"markLevel": "low"},
+                headers=auth(doc_gia))
+check("retranslate người khác → 403", r.status_code == 403, r.text)
+
+# --- markLevel khi import ---
+r = client.post(f"/stories/{mk_sid}/chapters/import-text",
+                json={"text": ZH2, "sourceLang": "zh", "chapterNo": 3,
+                      "markLevel": "high"},
+                headers=auth(tac_gia))
+check("import-text nhận markLevel=high = 200", r.status_code == 200, r.text)
+check("xoá lại chương kiểm thử số 3",
+      client.delete(f"/chapters/{r.json()['id']}",
+                    headers=auth(tac_gia)).status_code == 200)
+r = client.post(f"/stories/{mk_sid}/chapters/import-text",
+                json={"text": ZH2, "sourceLang": "zh", "chapterNo": 3,
+                      "markLevel": "sai"},
+                headers=auth(tac_gia))
+check("import-text markLevel sai → 400",
+      r.status_code == 400 and "markLevel" in r.json()["message"], r.text)
+
+# --- resolve-all + hoàn tác ---
+r = client.post(f"/stories/{mk_sid}/markers/resolve-all", headers=auth(doc_gia))
+check("resolve-all người khác → 403", r.status_code == 403, r.text)
+r = client.post("/stories/999999/markers/resolve-all", headers=auth(tac_gia))
+check("resolve-all truyện không tồn tại → 404",
+      r.status_code == 404 and "message" in r.json(), r.text)
+r = client.post(f"/stories/{mk_sid}/markers/resolve-all", json={},
+                headers=auth(tac_gia))
+ra = r.json()
+check("resolve-all = 200 {message, batchId, chaptersChanged, markersResolved}",
+      r.status_code == 200
+      and {"message", "batchId", "chaptersChanged", "markersResolved"} <= set(ra),
+      r.text)
+check("resolve-all đếm đúng chỗ đã resolve",
+      ra["markersResolved"] >= 1 and ra["chaptersChanged"] >= 1, str(ra))
+raw_after = client.get(f"/chapters/{mk_ch1}?raw=1",
+                       headers=auth(tac_gia)).json()["content"]
+check("sau resolve-all: 0 marker, giữ nghĩa đầu",
+      mk_markers(raw_after) == [] and "bái kiến" in raw_after, raw_after[:200])
+check("resolve-all không đổi OriginalContent (dịch lại vẫn ra y bản cũ)",
+      client.post(f"/chapters/{mk_ch1}/retranslate",
+                  json={"markLevel": "high"},
+                  headers=auth(tac_gia)).json()["content"]
+      == rt_high_ref, "khác bản trước resolve-all")
+r = client.post(f"/stories/{mk_sid}/replace/undo", headers=auth(tac_gia))
+check("undo resolve-all = 200", r.status_code == 200 and r.json()["restored"] >= 1,
+      r.text)
+check("sau undo: marker trở lại đúng như cũ",
+      client.get(f"/chapters/{mk_ch1}?raw=1",
+                 headers=auth(tac_gia)).json()["content"] == raw1)
+r = client.post(f"/stories/{mk_sid}/markers/resolve-all",
+                json={"onlyChapterId": mk_ch1}, headers=auth(tac_gia))
+check("resolve-all onlyChapterId → chỉ 1 chương",
+      r.status_code == 200 and r.json()["chaptersChanged"] == 1, r.text)
+r = client.post(f"/stories/{mk_sid}/markers/resolve-all",
+                json={"onlyChapterId": mk_ch1}, headers=auth(tac_gia))
+check("chương đã hết marker → 400 rõ ràng",
+      r.status_code == 400 and "message" in r.json(), r.text)
+r = client.post(f"/stories/{mk_sid}/markers/resolve-all",
+                json={"onlyChapterId": 999999}, headers=auth(tac_gia))
+check("onlyChapterId không thuộc truyện → 404",
+      r.status_code == 404, r.text)
+# để sạch cho phần kiểm tra word-choice: resolve nốt chương 2 rồi undo về ban đầu
+client.post(f"/stories/{mk_sid}/markers/resolve-all", headers=auth(tac_gia))
+client.post(f"/stories/{mk_sid}/replace/undo", headers=auth(tac_gia))
+check("trạng thái ban đầu phục hồi (chương 1 có marker)",
+      JG in client.get(f"/chapters/{mk_ch1}?raw=1",
+                       headers=auth(tac_gia)).json()["content"])
+
+# --- “Luôn dùng nghĩa này cho truyện này” (StoryWordChoices) ---
+r = client.post(f"/stories/{mk_sid}/word-choices",
+                json={"sourceKey": "见过", "chosenText": "đã từng gặp"},
+                headers=auth(tac_gia))
+wc = r.json()
+check("POST word-choice = 200 {id, sourceKey, chosenText, createdAt}",
+      r.status_code == 200
+      and {"id", "sourceKey", "chosenText", "createdAt"} <= set(wc), r.text)
+r = client.post(f"/chapters/{mk_ch1}/retranslate", json={"markLevel": "low"},
+                headers=auth(tac_gia))
+c = r.json()["content"]
+check("dịch lại truyện này tự dùng nghĩa đã chọn, không marker",
+      "đã từng gặp" in c and JG not in c, c[:200])
+# Truyện KHÁC dùng cùng văn bản → không bị ảnh hưởng
+r = client.post("/stories", json={"title": "Truyện Kiểm Thử Gợi Ý Khác"},
+                headers=auth(tac_gia))
+mk_sid2 = r.json()["id"]
+r = client.post(f"/stories/{mk_sid2}/chapters/import-text",
+                json={"text": ZH1, "sourceLang": "zh", "chapterNo": 1},
+                headers=auth(tac_gia))
+mk2_body = r.json()
+mk2_ch1 = mk2_body.get("id")
+check("truyện khác vẫn marker見過 (word-choice không lan)",
+      r.status_code == 200 and JG in mk2_body.get("content", ""),
+      str(mk2_body)[:200])
+r = client.post(f"/stories/{mk_sid}/word-choices",
+                json={"sourceKey": "见过", "chosenText": "đã gặp lại"},
+                headers=auth(tac_gia))
+check("POST trùng khóa → cập nhật nghĩa mới",
+      r.status_code == 200 and r.json()["chosenText"] == "đã gặp lại", r.text)
+r = client.get(f"/stories/{mk_sid}/word-choices", headers=auth(tac_gia))
+check("GET word-choices đúng 1 dòng (không nhân đôi)",
+      r.status_code == 200 and len(r.json()) == 1, r.text)
+r = client.post(f"/stories/{mk_sid}/word-choices",
+                json={"sourceKey": "见过", "chosenText": "a{b}"},
+                headers=auth(tac_gia))
+check("chosenText chứa dấu {} → 400", r.status_code == 400, r.text)
+r = client.post(f"/stories/{mk_sid}/word-choices",
+                json={"sourceKey": "", "chosenText": "x"},
+                headers=auth(tac_gia))
+check("sourceKey rỗng → 400", r.status_code == 400, r.text)
+r = client.get(f"/stories/{mk_sid}/word-choices", headers=auth(doc_gia))
+check("GET word-choices người khác → 403", r.status_code == 403, r.text)
+r = client.post(f"/stories/{mk_sid}/word-choices",
+                json={"sourceKey": "见过", "chosenText": "x"},
+                headers=auth(doc_gia))
+check("POST word-choice người khác → 403", r.status_code == 403, r.text)
+r = client.delete(f"/stories/{mk_sid}/word-choices/{wc['id'] + 999999}",
+                  headers=auth(tac_gia))
+check("DELETE word-choice không tồn tại → 404", r.status_code == 404, r.text)
+r = client.delete(f"/stories/{mk_sid}/word-choices/{wc['id']}",
+                  headers=auth(tac_gia))
+check("DELETE word-choice = 200", r.status_code == 200, r.text)
+r = client.post(f"/chapters/{mk_ch1}/retranslate", json={"markLevel": "low"},
+                headers=auth(tac_gia))
+check("xoá choice → dịch lại marker trở lại",
+      JG in r.json()["content"], r.json()["content"][:200])
+
+# --- “Không hỏi lại từ này” (StoryIgnoredWords — riêng truyện) ---
+r = client.post(f"/stories/{mk_sid}/ignored-words",
+                json={"sourceKey": "见过"}, headers=auth(tac_gia))
+iw = r.json()
+check("POST ignored-word = 200 {id, sourceKey, createdAt}",
+      r.status_code == 200
+      and {"id", "sourceKey", "createdAt"} <= set(iw), r.text)
+r = client.post(f"/stories/{mk_sid}/ignored-words",
+                json={"sourceKey": "见过"}, headers=auth(tac_gia))
+check("POST ignored-word trùng khóa → idempotent (cùng id)",
+      r.status_code == 200 and r.json()["id"] == iw["id"], r.text)
+r = client.post(f"/chapters/{mk_ch1}/retranslate", json={"markLevel": "low"},
+                headers=auth(tac_gia))
+c = r.json()["content"]
+check("dịch lại: khóa bỏ hỏi không marker, lấy nghĩa đầu",
+      JG not in c and "bái kiến" in c, c[:200])
+r = client.get(f"/chapters/{mk2_ch1}?raw=1", headers=auth(tac_gia))
+check("truyện khác vẫn marker (ignore không lan)",
+      r.status_code == 200 and JG in r.json()["content"], r.text)
+r = client.get(f"/stories/{mk_sid}/ignored-words", headers=auth(tac_gia))
+check("GET ignored-words = 200 danh sách", r.status_code == 200, r.text)
+r = client.post(f"/stories/{mk_sid}/ignored-words",
+                json={"sourceKey": "见过"}, headers=auth(doc_gia))
+check("POST ignored-word người khác → 403", r.status_code == 403, r.text)
+r = client.delete(f"/stories/{mk_sid}/ignored-words/{iw['id'] + 999999}",
+                  headers=auth(tac_gia))
+check("DELETE ignored-word không tồn tại → 404", r.status_code == 404, r.text)
+r = client.delete(f"/stories/{mk_sid}/ignored-words/{iw['id']}",
+                  headers=auth(tac_gia))
+check("DELETE ignored-word = 200", r.status_code == 200, r.text)
+r = client.delete(f"/stories/{mk_sid}/ignored-words/{iw['id']}",
+                  headers=auth(tac_gia))
+check("DELETE lần nữa → 404", r.status_code == 404, r.text)
+
+# --- Học hành vi: bỏ hỏi đủ lượt → QUY TẮC → hết marker MỌI truyện → xoá → trở lại ---
+# Thống kê UserWordStats tích luỹ mọi lượt ignore ở trên (bảng theo NGƯỜI, không
+# theo truyện) — đoạn này xoá quy tắc 见過 sót trước, rồi bỏ hỏi 5 lượt nữa
+# (đủ LEARN_SKIP_THRESHOLD=5 kể cả khi thống kê đã tích từ lần chạy trước).
+r = client.get("/me/mark-rules", headers=auth(tac_gia))
+check("GET /me/mark-rules = 200 mảng {id, sourceKey, skipCount, createdAt}",
+      r.status_code == 200
+      and all({"id", "sourceKey", "skipCount", "createdAt"} <= set(x)
+              for x in r.json()), r.text)
+check("GET /me/mark-rules chưa đăng nhập → 401",
+      client.get("/me/mark-rules").status_code == 401)
+for stale in [x for x in r.json() if x["sourceKey"] == "见过"]:
+    client.delete(f"/me/mark-rules/{stale['id']}", headers=auth(tac_gia))
+r = client.get("/me/mark-rules", headers=auth(tac_gia))
+check("dọn quy tắc 见過 sót — chưa học lại",
+      not any(x["sourceKey"] == "见过" for x in r.json()), r.text)
+
+# Truyện B CHƯA từng "không hỏi lại" 见過 → phải còn marker trước khi học
+r = client.post(f"/chapters/{mk2_ch1}/retranslate", json={"markLevel": "low"},
+                headers=auth(tac_gia))
+check("trước khi học: truyện B vẫn marker見過",
+      r.status_code == 200 and JG in r.json()["content"], r.text)
+
+# Bỏ hỏi 5 lượt (mỗi lượt +1 thống kê — tích luỹ mọi truyện)
+for _ in range(5):
+    r = client.post(f"/stories/{mk_sid}/ignored-words",
+                    json={"sourceKey": "见过"}, headers=auth(tac_gia))
+    check("bỏ hỏi lượt học = 200", r.status_code == 200, r.text)
+r = client.get("/me/mark-rules", headers=auth(tac_gia))
+learned = [x for x in r.json() if x["sourceKey"] == "见过"]
+check("đủ lượt bỏ qua → sinh ĐÚNG 1 quy tắc 见過 (không nhân đôi)",
+      r.status_code == 200 and len(learned) == 1, r.text)
+check("quy tắc mang skipCount ≥ 5", learned[0]["skipCount"] >= 5,
+      str(learned))
+r = client.delete(f"/me/mark-rules/{learned[0]['id']}", headers=auth(doc_gia))
+check("xoá quy tắc người khác → 404", r.status_code == 404, r.text)
+
+# Quy tắc áp MỌI truyện: dịch lại truyện B (chưa từng ignore) → hết marker
+r = client.post(f"/chapters/{mk2_ch1}/retranslate", json={"markLevel": "low"},
+                headers=auth(tac_gia))
+check("đã học: truyện B hết marker見過",
+      r.status_code == 200 and JG not in r.json()["content"],
+      r.json().get("content", "")[:200])
+
+# Xoá quy tắc → marker trở lại
+r = client.delete(f"/me/mark-rules/{learned[0]['id']}", headers=auth(tac_gia))
+check("xoá quy tắc (chủ) = 200", r.status_code == 200 and "message" in r.json(),
+      r.text)
+r = client.post(f"/chapters/{mk2_ch1}/retranslate", json={"markLevel": "low"},
+                headers=auth(tac_gia))
+check("xong: truyện B có lại marker見過",
+      JG in r.json()["content"], r.json().get("content", "")[:200])
+r = client.get("/me/mark-rules", headers=auth(tac_gia))
+check("xoá thật sự biến mất khỏi danh sách",
+      not any(x["id"] == learned[0]["id"] for x in r.json()), r.text)
+
+# Bỏ hỏi thêm 1 lượt → thống kê đã đủ → quy tắc sinh lại (học lại được)
+r = client.post(f"/stories/{mk_sid}/ignored-words",
+                json={"sourceKey": "见过"}, headers=auth(tac_gia))
+check("bỏ hỏi sau xoá = 200", r.status_code == 200, r.text)
+r = client.get("/me/mark-rules", headers=auth(tac_gia))
+learned2 = [x for x in r.json() if x["sourceKey"] == "见过"]
+check("bỏ hỏi thêm → quy tắc 见過 sinh lại",
+      len(learned2) == 1, r.text)
+r = client.delete(f"/me/mark-rules/{learned2[0]['id']}", headers=auth(tac_gia))
+check("dọn quy tắc học (test chạy lại được)", r.status_code == 200, r.text)
+r = client.delete("/me/mark-rules/999999", headers=auth(tac_gia))
+check("DELETE quy tắc không tồn tại → 404", r.status_code == 404, r.text)
+
+# --- Gửi DANH SÁCH NGHĨA thay vì khóa chữ Hán (client mới, backend tra ngược) ---
+r = client.get(f"/chapters/{mk_ch1}?raw=1", headers=auth(tac_gia))
+mk_now = alternatives.parse(r.json()["content"])
+check("bản thô hiện tại: mọi marker chỉ nghĩa Việt",
+      bool(mk_now) and not any(alternatives.has_cjk(m.text) for m in mk_now),
+      str(mk_now))
+meanings = list(mk_now[0].meanings)
+
+r = client.post(f"/stories/{mk_sid}/word-choices",
+                json={"meanings": meanings, "chosenText": "nghĩa chọn theo nghĩa"},
+                headers=auth(tac_gia))
+wc2 = r.json()
+check("POST word-choices CHỈ gửi meanings = 200 + affectedIds",
+      r.status_code == 200 and wc2.get("affectedIds"), r.text)
+check("affectedIds chứa id phản hồi", wc2["id"] in wc2["affectedIds"], str(wc2))
+r = client.post(f"/chapters/{mk_ch1}/retranslate", json={"markLevel": "low"},
+                headers=auth(tac_gia))
+c = r.json()["content"]
+check("dịch lại dùng nghĩa đã chọn (không cần sourceKey), hết marker",
+      "nghĩa chọn theo nghĩa" in c and JG not in c, c[:200])
+r = client.post(f"/stories/{mk_sid}/word-choices", json={"chosenText": "x"},
+                headers=auth(tac_gia))
+check("word-choices thiếu cả sourceKey lẫn meanings → 400 có message",
+      r.status_code == 400 and "message" in r.json(), r.text)
+# Xoá ngay nghĩa đã chọn (MỌI khóa tra ngược được) — để bước bỏ hỏi sau thấy marker
+for wid in wc2.get("affectedIds", [wc2["id"]]):
+    client.delete(f"/stories/{mk_sid}/word-choices/{wid}", headers=auth(tac_gia))
+
+r = client.post(f"/stories/{mk_sid}/ignored-words", json={"meanings": meanings},
+                headers=auth(tac_gia))
+iw2 = r.json()
+check("POST ignored-words CHỈ gửi meanings = 200 + affectedIds",
+      r.status_code == 200 and iw2.get("affectedIds"), r.text)
+r = client.post(f"/chapters/{mk_ch1}/retranslate", json={"markLevel": "low"},
+                headers=auth(tac_gia))
+c = r.json()["content"]
+check("bỏ hỏi theo nghĩa → hết marker, lấy nghĩa đầu",
+      JG not in c and "bái kiến" in c, c[:200])
+r = client.post(f"/stories/{mk_sid}/ignored-words", json={},
+                headers=auth(tac_gia))
+check("ignored-words thiếu cả hai → 400 có message",
+      r.status_code == 400 and "message" in r.json(), r.text)
+# Dọn để không ảnh hưởng các bước sau (xoá MỌI khóa đã tra ngược được)
+for wid in iw2.get("affectedIds", [iw2["id"]]):
+    client.delete(f"/stories/{mk_sid}/ignored-words/{wid}", headers=auth(tac_gia))
+
+# --- markers/clean: dọn chữ Hán dữ liệu CŨ trong DB (có snapshot hoàn tác) ---
+from app.database import SessionLocal
+from app.models import Chapter as ChapterRow
+
+db = SessionLocal()
+_row = db.get(ChapterRow, mk_ch1)
+_orig_content = _row.content
+_row.content = "Còn {为|vì|là|vi} rút đi kiều mị, {少年|nghĩa một} là marker."
+db.commit()
+db.close()
+
+r = client.get(f"/chapters/{mk_ch1}?raw=1", headers=auth(tac_gia))
+raw_clean = r.json()["content"]
+check("raw=1 làm sạch dữ liệu cũ khi đọc: {为|…} → {vì|là|vi}",
+      "{vì|là|vi}" in raw_clean and "为" not in raw_clean, raw_clean[:200])
+check("raw=1: marker còn 1 nghĩa sau khi loại chữ Hán → bỏ {}",
+      "nghĩa một" in raw_clean and "{少年" not in raw_clean, raw_clean[:200])
+r = client.get(f"/chapters/{mk_ch1}")
+reader = r.json()["content"]
+check("bản đọc: không {}, không chữ Hán của marker",
+      "{" not in reader and "为" not in reader and "少年" not in reader,
+      reader[:200])
+check("markers/clean chưa đăng nhập → 401",
+      client.post(f"/stories/{mk_sid}/markers/clean").status_code == 401)
+r = client.post(f"/stories/{mk_sid}/markers/clean", json={},
+                headers=auth(doc_gia))
+check("markers/clean người khác → 403", r.status_code == 403, r.text)
+
+r = client.post(f"/stories/{mk_sid}/markers/clean", json={},
+                headers=auth(tac_gia))
+cl = r.json()
+check("markers/clean = 200 {message, batchId, chaptersChanged, markersResolved}",
+      r.status_code == 200
+      and {"message", "batchId", "chaptersChanged", "markersResolved"} <= set(cl),
+      r.text)
+check("clean đếm đúng 2 chỗ cần dọn",
+      cl["markersResolved"] == 2 and cl["chaptersChanged"] >= 1, str(cl))
+db = SessionLocal()
+_stored = db.get(ChapterRow, mk_ch1).content
+db.close()
+check("DB đã ghi dạng sạch sau clean",
+      "为" not in _stored and "{vì|là|vi}" in _stored, _stored[:200])
+r = client.post(f"/stories/{mk_sid}/markers/clean", json={},
+                headers=auth(tac_gia))
+check("clean lần nữa → 400 (không còn chữ Hán)",
+      r.status_code == 400 and "message" in r.json(), r.text)
+r = client.post(f"/stories/{mk_sid}/replace/undo", headers=auth(tac_gia))
+check("undo clean = 200 (có snapshot như resolve-all)",
+      r.status_code == 200 and r.json().get("restored", 0) >= 1, r.text)
+db = SessionLocal()
+_restored = db.get(ChapterRow, mk_ch1).content
+db.close()
+check("undo trả lại bản cũ (chữ Hán trở lại trong DB)",
+      "{为|" in _restored, _restored[:200])
+r = client.get(f"/chapters/{mk_ch1}?raw=1", headers=auth(tac_gia))
+check("nhưng bản thô ĐỌC VẪN sạch (normalize khi đọc)",
+      "为" not in r.json()["content"], r.json()["content"][:200])
+# Trả lại nội dung gốc (PUT tự normalize — bản gốc đã sạch) để test chạy lại được
+r = client.put(f"/chapters/{mk_ch1}", json={"content": _orig_content},
+               headers=auth(tac_gia))
+check("trả lại nội dung chương gốc = 200", r.status_code == 200, r.text)
+
+# --- Nạp lại danh sách file (không cần restart) ---
+r = client.post("/dictionary/mark-lists/reload", headers=auth(tac_gia))
+check("POST /dictionary/mark-lists/reload = 200 {ok, noMark, ambiguous, synonyms}",
+      r.status_code == 200
+      and {"ok", "noMark", "ambiguous", "synonyms"} <= set(r.json()), r.text)
+check("no_mark.txt nạp được (≥ 50 khóa)", r.json()["noMark"] >= 50,
+      str(r.json()))
+r = client.post("/dictionary/mark-lists/reload")
+check("mark-lists/reload chưa đăng nhập → 401",
+      r.status_code == 401 and "message" in r.json(), r.text)
+
+check("dọn truyện kiểm thử gợi ý 1",
+      client.delete(f"/stories/{mk_sid}", headers=auth(tac_gia)).status_code == 200)
+check("dọn truyện kiểm thử gợi ý 2",
+      client.delete(f"/stories/{mk_sid2}", headers=auth(tac_gia)).status_code == 200)
+
 print("\n=== DỌN DẸP ===")
+_purge_words(doc_gia)  # không để sót từ của doc_gia (test chạy lại được)
+# Dọn mọi quy tắc học còn sót — bỏ hỏi theo nghĩa ở trên có thể đã sinh lại
+# quy tắc 见过 SAO khi phần học hành vi đã dọn (test chạy lại được).
+r = client.get("/me/mark-rules", headers=auth(tac_gia))
+for x in r.json():
+    client.delete(f"/me/mark-rules/{x['id']}", headers=auth(tac_gia))
 r = client.delete(f"/stories/{draft_id}", headers=auth(tac_gia))
 check("xoá truyện nháp", r.status_code == 200, r.text)
 r = client.delete(f"/stories/{sid}", headers=auth(tac_gia))

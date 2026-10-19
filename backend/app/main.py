@@ -19,7 +19,9 @@ from .routers import (
     dictionary,
     follows,
     genres,
+    glossary,
     imports,
+    markers,
     stories,
 )
 
@@ -76,6 +78,8 @@ app.include_router(follows.router)
 app.include_router(comments.router)
 app.include_router(imports.router)
 app.include_router(dictionary.router)
+app.include_router(glossary.router)
+app.include_router(markers.router)
 
 
 # --- Endpoint kiểm tra nhanh ----------------------------------------------------

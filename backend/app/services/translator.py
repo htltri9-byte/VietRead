@@ -309,6 +309,10 @@ def translate_text(
     text: str,
     target_lang: str = "vi",
     on_progress=None,
+    mark_alternatives: bool = False,
+    mark_level: str | None = None,
+    key_choices: dict[str, str] | None = None,
+    skip_keys: set[str] | None = None,
 ) -> str:
     """Dịch [text] sang [target_lang] theo biến `TRANSLATE_MODE` trong `.env`:
 
@@ -316,6 +320,16 @@ def translate_text(
       không cần mạng, không cần TRANSLATE_API_KEY / TRANSLATE_API_URL;
     - **`online`**: chỉ dùng chuỗi endpoint online như trước;
     - **`auto`**: thử online trước, lỗi thì rơi về từ điển offline.
+
+    `mark_alternatives=True` — cụm từ điển có nhiều nghĩa (đã qua bộ lọc
+    [app.marking]) được xuất thành marker `{中文|nghĩa1|nghĩa2}` (chỉ áp dụng
+    khi dịch bằng từ điển; dịch online không tạo marker) — dùng cho nội dung
+    chương lưu vào `Content` bản thô.
+
+    `mark_level` — mức gợi ý `low | medium | high` (mặc định `MARK_LEVEL` trong
+    `.env` → `low`). `key_choices` / `skip_keys` — nghĩa đã chọn / khóa bỏ hỏi
+    RIÊNG CỦA TRUYỆN (StoryWordChoices / StoryIgnoredWords) — khoá này tự dùng
+    đúng nghĩa đã chọn, không tạo marker nữa.
 
     `on_progress(done, total)` (tuỳ chọn) được gọi theo từng đoạn xuống dòng khi
     dịch từ điển — worker dùng để cập nhật % tiến độ job. Lỗi từ điển được bọc
@@ -338,23 +352,36 @@ def translate_text(
                 raise
             logger.warning("Dịch online lỗi — chuyển sang từ điển offline", exc_info=True)
 
-    return _translate_dict(text, on_progress)
+    return _translate_dict(
+        text,
+        on_progress,
+        mark_alternatives,
+        mark_level,
+        key_choices,
+        skip_keys,
+    )
 
 
-def _translate_dict(text: str, on_progress=None) -> str:
-    """Dịch offline bằng từ điển — chia theo từng đoạn (xuống dòng) để báo tiến độ."""
+def _translate_dict(
+    text: str,
+    on_progress=None,
+    mark_alternatives: bool = False,
+    mark_level: str | None = None,
+    key_choices: dict[str, str] | None = None,
+    skip_keys: set[str] | None = None,
+) -> str:
+    """Dịch offline bằng từ điển — chia theo từng dòng, trần marker tính cả chương."""
     try:
         vietphrase.load()
         lines = text.split("\n")
-        total = len(lines)
-        converted: list[str] = []
-        for done, line in enumerate(lines, start=1):
-            converted.append(vietphrase.convert(line))
-            if on_progress is not None:
-                try:
-                    on_progress(done, total)
-                except Exception:
-                    logger.exception("Lỗi callback tiến độ dịch từ điển (bỏ qua)")
+        converted = vietphrase.convert_lines(
+            lines,
+            mark_alternatives=mark_alternatives,
+            mark_level=mark_level,
+            key_choices=key_choices,
+            skip_keys=skip_keys,
+            on_progress=on_progress,
+        )
         return "\n".join(converted)
     except TranslationError:
         raise

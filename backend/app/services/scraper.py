@@ -1,6 +1,6 @@
 """Cào thông tin truyện + chương từ nguồn nước ngoài (C4 — Bước 10).
 
-Mỗi nguồn (Qidian, B.faloo, Fanqie…) là một adapter riêng cùng interface
+Mỗi nguồn (Qidian…) là một adapter riêng cùng interface
 `parse_story(url)` / `parse_chapter(url)` để dễ thêm nguồn mới.
 
 Chiến lược parse best-effort: thẻ `og:` (title/mô tả/bìa) + regex link chương
@@ -15,8 +15,6 @@ mạng) để kiểm thử / demo toàn bộ luồng nhập – dịch mà khôn
 from __future__ import annotations
 
 import html as html_lib
-import json
-import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -108,16 +106,11 @@ def _strip_tags(fragment: str) -> str:
     return re.sub(r"\s+", " ", html_lib.unescape(text)).strip()
 
 
-# Ký tự PUA (Private Use Area) — Fanqie thay chữ thật bằng ký tự ngoài Unicode
-# rồi render bằng font web riêng → gặp PUA là nội dung bị mã hoá anti-scrape.
-PUA_RE = re.compile(r"[\ue000-\uf8ff]")
-
-
 def _extract_content(html: str) -> str:
     """Lấy nội dung chương: các thẻ <p> (bỏ script/style).
 
     Chỉ tin thẻ <p> — tách theo `<br>` hay dòng lề dễ lấy nhầm phần điều hướng
-    thành nội dung (thực tế gặp với trang chương Faloo)."""
+    thành nội dung."""
     body = re.sub(
         r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.IGNORECASE | re.S
     )
@@ -151,7 +144,7 @@ class _HtmlAdapter(SourceAdapter):
     """Adapter dùng chung cho các nguồn HTML thuần (og: meta + regex link chương).
 
     Tên/mô tả/bìa lấy từ thẻ `og:`; danh sách chương là các link có chữ
-    `第…章/回/节` (mẫu link chương của Qidian/Fanqie/Faloo); nội dung chương
+    `第…章/回/节` (mẫu link chương của Qidian); nội dung chương
     lấy toàn bộ thẻ `<p>`.
     """
 
@@ -292,69 +285,6 @@ class QidianAdapter(_HtmlAdapter):
         return ParsedChapter(title=title, content=content)
 
 
-class FalooAdapter(_HtmlAdapter):
-    """B.faloo (b.faloo.com / wap.faloo.com) — trang chương yêu cầu đăng nhập
-    tài khoản (thẻ `noLogin`) nên khách đọc được trang nhưng không có nội dung."""
-
-    hosts = ("faloo.com",)
-
-    def parse_chapter(self, url: str) -> ParsedChapter:
-        page = _fetch(url)
-        title = _meta(page, "og:title")
-        if not title:
-            m_h1 = re.search(r"<h1[^>]*>(.*?)</h1>", page, flags=re.S)
-            title = _strip_tags(m_h1.group(1)) if m_h1 else ""
-        content = _extract_content(page)
-        if len(content) >= 30:
-            return ParsedChapter(title=title, content=content)
-        if "noLogin" in page or "请登录" in page:
-            raise AdapterError(
-                "Faloo yêu cầu đăng nhập tài khoản mới đọc được nội dung chương "
-                "(khách chỉ thấy thông báo đăng nhập)"
-            )
-        raise AdapterError(
-            "Nội dung chương Faloo rỗng — nguồn có thể đã đổi giao diện hoặc chặn máy chủ"
-        )
-
-
-class FanqieAdapter(_HtmlAdapter):
-    """Fanqie Novel (fanqie.com.cn / fanqienovel.com) — trang chương SSR nhưng
-    **mã hoá nội dung**: chữ bị thay bằng ký tự PUA rồi render bằng font web
-    riêng (anti-scrape); đọc nội dung từ JSON `chapterData.content` và báo rõ
-    khi gặp bản mã hoá (giải mã thật cần OCR font — ngoài phạm vi demo)."""
-
-    hosts = ("fanqie.com.cn", "fanqienovel.com")
-
-    def parse_chapter(self, url: str) -> ParsedChapter:
-        page = _fetch(url)
-        title = _meta(page, "og:title")
-        content = ""
-        marker = page.find('"chapterData"')
-        if marker >= 0:
-            try:
-                data, _ = json.JSONDecoder().raw_decode(
-                    page, page.find(":", marker) + 1
-                )
-                if isinstance(data, dict):
-                    title = str(data.get("title") or title or "")
-                    content = _extract_content(str(data.get("content") or ""))
-            except (json.JSONDecodeError, IndexError, TypeError):
-                content = ""
-        if not content:
-            content = _extract_content(page)
-        if len(content) < 30:
-            raise AdapterError(
-                "Không đọc được nội dung chương Fanqie — nguồn có thể yêu cầu đăng nhập "
-                "hoặc đổi giao diện"
-            )
-        if PUA_RE.search(content):
-            raise AdapterError(
-                "Fanqie mã hoá nội dung bằng font anti-scrape (chữ bị thay bằng ký tự "
-                "ngoài Unicode) — chưa giải mã được, cần công cụ OCR font riêng"
-            )
-        return ParsedChapter(title=title, content=content)
-
-
 # ---------------------------------------------------------------------------
 # Nguồn demo — fixture có sẵn, không cào mạng (dùng cho kiểm thử / demo)
 # ---------------------------------------------------------------------------
@@ -384,7 +314,7 @@ class DemoAdapter(SourceAdapter):
 
     Việc *dịch* vẫn chạy thật — nên dùng nguồn này để demo luồng
     Pending → Running → % → Done + truyện nháp ngay cả khi không cào được
-    Qidian/Fanqie (chặn IP, nội dung trả phí).
+    Qidian (chặn IP, nội dung trả phí).
     """
 
     hosts = (DEMO_HOST,)
@@ -414,8 +344,6 @@ class DemoAdapter(SourceAdapter):
 # Các nguồn thật + nguồn demo (đúng thứ tự ưu tiên tra host)
 ADAPTERS: tuple[SourceAdapter, ...] = (
     QidianAdapter(),
-    FalooAdapter(),
-    FanqieAdapter(),
     DemoAdapter(),
 )
 
@@ -424,6 +352,14 @@ def host_of(url: str) -> str:
     """Host của link (bỏ user:pass và port) — dùng cho thông báo lỗi."""
     netloc = urlparse(url).netloc
     return netloc.split("@")[-1].split(":")[0].lower()
+
+
+# "第1章 积土成山" — tiền tố đánh số chương kiểu Trung: bỏ khi dịch tên chương
+# (app dùng "Chương N: " tự hiển thị). Dùng chung cho import worker + router
+# thêm chương — trước đây bị nhân bản ở 2 file.
+CHAPTER_PREFIX_RE = re.compile(
+    r"^\s*第\s*[0-9０-９零一二三四五六七八九十百千两兩]+\s*[章节回卷篇话序]\s*[:：]?\s*"
+)
 
 
 # ---------------------------------------------------------------------------

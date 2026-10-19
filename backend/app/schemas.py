@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from . import marking
 
 
 class UserOut(BaseModel):
@@ -321,12 +323,25 @@ MAX_PASTED_TEXT = 100_000  # giới hạn ký tự cho dán văn bản (một ch
 
 
 class _ChapterImportFields(BaseModel):
-    """Trường chung: số chương tuỳ chọn + tên chương tuỳ chọn."""
+    """Trường chung: số chương tuỳ chọn + tên chương tuỳ chọn + mức gợi ý."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     chapter_no: int | None = Field(default=None, alias="chapterNo", ge=1, le=1_000_000)
     title: str | None = Field(default=None, max_length=255)
+    # Mức gợi ý nhiều nghĩa khi dịch chương nhập: low | medium | high
+    # (thiếu → MARK_LEVEL trong .env, mặc định low)
+    mark_level: str | None = Field(default=None, alias="markLevel", max_length=10)
+
+    @field_validator("mark_level")
+    @classmethod
+    def _check_mark_level(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip().lower()
+        if value not in marking.LEVELS:
+            raise ValueError("markLevel phải là 'low', 'medium' hoặc 'high'")
+        return value
 
     @field_validator("title")
     @classmethod
@@ -378,3 +393,325 @@ class ChapterImportByText(_ChapterImportFields):
         if value not in ("zh", "vi"):
             raise ValueError("sourceLang phải là 'zh' (Trung) hoặc 'vi' (Việt)")
         return value
+
+
+# ===========================================================================
+# Sửa bản dịch: gợi ý nhiều nghĩa (marker) + tìm & thay thế theo truyện
+# ===========================================================================
+
+
+class ReplaceRequest(BaseModel):
+    """POST /stories/{id}/replace
+
+    — { find, replace, matchCase, wholeWord, includeTitles, applyToFuture, dryRun }.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    find: str
+    replace: str = ""
+    match_case: bool = Field(default=False, alias="matchCase")
+    whole_word: bool = Field(default=False, alias="wholeWord")
+    include_titles: bool = Field(default=False, alias="includeTitles")
+    apply_to_future: bool = Field(default=False, alias="applyToFuture")
+    dry_run: bool = Field(default=False, alias="dryRun")
+
+    @field_validator("find")
+    @classmethod
+    def _check_find(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Chuỗi cần tìm không được để trống")
+        if len(value) > 200:
+            raise ValueError("Chuỗi cần tìm tối đa 200 ký tự")
+        return value
+
+
+class ReplaceChapterHit(BaseModel):
+    """Một chương bị ảnh hưởng: { chapterId, chapterNo, matches }."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    chapter_id: int = Field(alias="chapterId")
+    chapter_no: int = Field(alias="chapterNo")
+    matches: int
+
+
+class ReplaceOut(BaseModel):
+    """POST /stories/{id}/replace.
+
+    `dryRun=true` → chỉ `{ dryRun, totalMatches, chapters }`;
+    `dryRun=false` → thêm `batchId` + `chaptersChanged` (dùng cho hoàn tác).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    dry_run: bool = Field(alias="dryRun")
+    total_matches: int = Field(alias="totalMatches")
+    chapters: list[ReplaceChapterHit]
+    batch_id: str | None = Field(default=None, alias="batchId")
+    chapters_changed: int | None = Field(default=None, alias="chaptersChanged")
+
+
+class UndoOut(BaseModel):
+    """POST /stories/{id}/replace/undo — { message, restored, skipped }."""
+
+    message: str
+    restored: int
+    skipped: int
+
+
+class GlossaryRuleOut(BaseModel):
+    """GET /stories/{id}/glossary — một quy tắc đã lưu (A → B)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: int
+    find_text: str = Field(alias="findText")
+    replace_text: str = Field(alias="replaceText")
+    match_case: bool = Field(alias="matchCase")
+    whole_word: bool = Field(alias="wholeWord")
+    apply_to_future: bool = Field(alias="applyToFuture")
+    created_at: datetime = Field(alias="createdAt")
+
+
+class RetranslateOut(BaseModel):
+    """POST /chapters/{id}/retranslate — nội dung để nạp vào màn Sửa chương.
+
+    KHÔNG tự lưu: chỉ trả về, người dùng bấm Lưu mới ghi vào `Content`.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    chapter_id: int = Field(alias="chapterId")
+    content: str
+
+
+class DictionaryWordOut(BaseModel):
+    """GET /dictionary/names — một từ của từ điển cá nhân.
+
+    `{ id, zh, vi, tags, createdAt }` — tags tuỳ chọn, phân cách dấu phẩy.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: int
+    zh: str
+    vi: str
+    tags: str | None = None
+    created_at: datetime = Field(alias="createdAt")
+
+
+# ===========================================================================
+# Gợi ý nhiều nghĩa: mức gợi ý + nghĩa đã chọn theo truyện + resolve-all
+# ===========================================================================
+
+
+def _check_mark_level_field(value: str | None) -> str | None:
+    """Validate `markLevel` — None/rỗng → None (dùng mức mặc định từ .env)."""
+    if value is None or not value.strip():
+        return None
+    value = value.strip().lower()
+    if value not in marking.LEVELS:
+        raise ValueError("markLevel phải là 'low', 'medium' hoặc 'high'")
+    return value
+
+
+class RetranslateRequest(BaseModel):
+    """POST /chapters/{id}/retranslate — body TUỲ CHỌN `{ markLevel? }`.
+
+    Không gửi body (client cũ) → giữ nguyên hành vi, lấy mức từ `MARK_LEVEL`.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    mark_level: str | None = Field(default=None, alias="markLevel", max_length=10)
+
+    @field_validator("mark_level")
+    @classmethod
+    def _check_level(cls, value: str | None) -> str | None:
+        return _check_mark_level_field(value)
+
+
+class ResolveAllRequest(BaseModel):
+    """POST /stories/{id}/markers/resolve-all — `{ onlyChapterId? }`.
+
+    `onlyChapterId` — chỉ lấy nghĩa đầu cho một chương; thiếu = cả truyện.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    only_chapter_id: int | None = Field(default=None, alias="onlyChapterId", ge=1)
+
+
+class ResolveAllOut(BaseModel):
+    """POST /stories/{id}/markers/resolve-all — snapshot vào ChapterRevisions
+    (dùng `POST /stories/{id}/replace/undo` để hoàn tác batch này)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    message: str
+    batch_id: str = Field(alias="batchId")
+    chapters_changed: int = Field(alias="chaptersChanged")
+    markers_resolved: int = Field(alias="markersResolved")
+
+
+def _clean_meanings_field(values: list[str]) -> list[str]:
+    """Chuẩn hóa danh sách nghĩa gửi lên: bỏ trắng/trùng, LOẠI phần tử CJK
+    (marker không bao giờ chứa chữ Hán), trần 6 nghĩa như [MAX_ALTERNATIVES]."""
+    from . import alternatives  # import lỏng — tránh vòng phụ thuộc khi start
+
+    out: list[str] = []
+    for value in values:
+        item = str(value).strip()
+        if not item or alternatives.has_cjk(item):
+            continue  # phòng thủ: không nhận phần tử chứa chữ Hán/dấu CJK
+        if "{" in item or "}" in item or "|" in item or "\r" in item or "\n" in item:
+            raise ValueError("Nghĩa không được chứa { } | hoặc xuống dòng")
+        if item not in out:
+            out.append(item)
+    return out[:6]
+
+
+class WordChoiceIn(BaseModel):
+    """POST /stories/{id}/word-choices — `{ sourceKey?, chosenText, meanings? }`.
+
+    Client gửi **danh sách nghĩa của marker** ([meanings]) thay vì khóa chữ
+    Trung; backend tra ngược khóa từ điển (mọi khóa có marker trùng danh sách
+    nghĩa) và lưu cho tất cả. [source_key] giữ nguyên cho client cũ / dữ liệu
+    marker cũ (khóa vẫn parse được nội bộ). Cần ít nhất 1 trong 2.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_key: str | None = Field(default=None, alias="sourceKey", max_length=200)
+    chosen_text: str = Field(alias="chosenText", min_length=1, max_length=200)
+    meanings: list[str] | None = Field(default=None)
+
+    @field_validator("source_key")
+    @classmethod
+    def _check_source_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("sourceKey không được để trống")
+        if any(ch in value for ch in "{}|=\r\n"):
+            raise ValueError("sourceKey không được chứa { } = | hoặc xuống dòng")
+        return value
+
+    @field_validator("meanings")
+    @classmethod
+    def _check_meanings(cls, value: list[str] | None) -> list[str] | None:
+        return _clean_meanings_field(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def _need_key_or_meanings(self) -> "WordChoiceIn":
+        if not self.source_key and not self.meanings:
+            raise ValueError("Cần gửi sourceKey hoặc meanings")
+        return self
+
+    @field_validator("chosen_text")
+    @classmethod
+    def _check_chosen_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("chosenText không được để trống")
+        if "{" in value or "}" in value:
+            raise ValueError("chosenText không được chứa dấu { hoặc } (dấu marker)")
+        if "\r" in value or "\n" in value:
+            raise ValueError("chosenText không được xuống dòng")
+        return value
+
+
+class WordChoiceOut(BaseModel):
+    """GET /stories/{id}/word-choices — một nghĩa đã lưu theo truyện."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: int
+    source_key: str = Field(alias="sourceKey")
+    chosen_text: str = Field(alias="chosenText")
+    created_at: datetime = Field(alias="createdAt")
+
+
+class WordChoiceSavedOut(WordChoiceOut):
+    """Phản hồi POST — thêm [affected_ids]: MỌI khóa đã ghi (nhiều khóa có
+    cùng danh sách nghĩa → lưu cho tất cả; client dùng để hoàn tác).
+
+    GET vẫn dùng [WordChoiceOut] (không thêm trường). Client cũ bỏ qua
+    trường thừa này.
+    """
+
+    affected_ids: list[int] = Field(default_factory=list, alias="affectedIds")
+
+
+class IgnoredWordIn(BaseModel):
+    """POST /stories/{id}/ignored-words — `{ sourceKey?, meanings? }` (không hỏi lại).
+
+    Tương tự [WordChoiceIn]: client gửi danh sách nghĩa của marker, backend
+    tra ngược khóa (mọi khóa trùng danh sách nghĩa); `sourceKey` cho client cũ.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_key: str | None = Field(default=None, alias="sourceKey", max_length=200)
+    meanings: list[str] | None = Field(default=None)
+
+    @field_validator("source_key")
+    @classmethod
+    def _check_source_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("sourceKey không được để trống")
+        if any(ch in value for ch in "{}|=\r\n"):
+            raise ValueError("sourceKey không được chứa { } = | hoặc xuống dòng")
+        return value
+
+    @field_validator("meanings")
+    @classmethod
+    def _check_meanings(cls, value: list[str] | None) -> list[str] | None:
+        return _clean_meanings_field(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def _need_key_or_meanings(self) -> "IgnoredWordIn":
+        if not self.source_key and not self.meanings:
+            raise ValueError("Cần gửi sourceKey hoặc meanings")
+        return self
+
+
+class IgnoredWordOut(BaseModel):
+    """GET /stories/{id}/ignored-words — một khóa đã bỏ hỏi theo truyện."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: int
+    source_key: str = Field(alias="sourceKey")
+    created_at: datetime = Field(alias="createdAt")
+
+
+class IgnoredWordSavedOut(IgnoredWordOut):
+    """Phản hồi POST — thêm [affected_ids]: mọi khóa đã ghi (xem [WordChoiceSavedOut])."""
+
+    affected_ids: list[int] = Field(default_factory=list, alias="affectedIds")
+
+
+class MarkRuleOut(BaseModel):
+    """GET /me/mark-rules — quy tắc học từ hành vi (UserMarkRules).
+
+    ``skipCount`` = số lượt bỏ qua đã tích luỹ lúc quy tắc được sinh
+    (hiển thị ở màn Quy tắc để người đăng biết vì sao khoá này hết hỏi).
+
+    ``meanings`` = nghĩa tiếng Việt của khoá (tra từ từ điển) — màn Quy tắc
+    hiển thị NGHĨA thay cho khoá chữ Trung (``sourceKey`` vẫn trả về cho
+    client cũ/đối chiếu, không hiển thị).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: int
+    source_key: str = Field(alias="sourceKey")
+    skip_count: int = Field(alias="skipCount")
+    created_at: datetime = Field(alias="createdAt")
+    meanings: list[str] | None = Field(default=None)

@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import time
 from datetime import datetime, timezone
 
@@ -25,7 +24,10 @@ from sqlalchemy import select
 
 from ..database import SessionLocal
 from ..models import Chapter, Genre, ImportJob, Story, StoryGenre
+from . import glossary as glossary_service
+from .story_words import load_choices, load_learned_keys, load_skips
 from .scraper import (
+    CHAPTER_PREFIX_RE,
     AdapterError,
     ParsedStory,
     get_adapter,
@@ -36,12 +38,6 @@ from .scraper import (
 from .translator import translate_text
 
 logger = logging.getLogger("vietread.imports")
-
-# Tiêu đề chương kiểu "第1章 积土成山" — bỏ tiền tố đánh số vì app tự hiển thị "Chương N: "
-_CHAPTER_PREFIX = re.compile(
-    r"^\s*第\s*[0-9０-９零一二三四五六七八九十百千两兩]+\s*[章节回卷篇话序]\s*[:：]?\s*"
-)
-
 
 def _utc_now() -> datetime:
     """Thời gian UTC naive — khớp DATETIME2 (SYSUTCDATETIME) như các router khác."""
@@ -98,8 +94,7 @@ def run_import_job(job_id: int) -> None:
         if adapter is None:
             raise AdapterError(
                 f"Nguồn '{host_of(job.source_url)}' chưa được hỗ trợ — "
-                "hiện hỗ trợ Qidian, B.faloo, Fanqie và nguồn demo "
-                "demo.vietread.local"
+                "hiện chỉ hỗ trợ Qidian và nguồn demo demo.vietread.local"
             )
 
         parsed: ParsedStory = adapter.parse_story(job.source_url)
@@ -140,6 +135,12 @@ def run_import_job(job_id: int) -> None:
         # --- 3) Từng chương: cào → dịch → lưu → cập nhật Progress ------------
         total = len(chapters)
         delay = _env_float("IMPORT_CHAPTER_DELAY", 0.5)
+        # Nạp 1 lần cho CẢ BỘ: nghĩa đã chọn / khóa bỏ hỏi / quy tắc đã học /
+        # quy tắc ApplyToFuture — các khoá này không đổi trong 1 lần import
+        # (tránh 4 query lặp theo mỗi chương — trước đây N+1 với bộ vài trăm chương).
+        key_choices = load_choices(db, story.id)
+        skip_keys = load_skips(db, story.id) | load_learned_keys(db, job.user_id)
+        future_rules = glossary_service.load_future_rules(db, story.id)
         for i, (chapter_title, chapter_url) in enumerate(chapters, start=1):
             parsed_chapter = adapter.parse_chapter(chapter_url)
 
@@ -158,9 +159,22 @@ def run_import_job(job_id: int) -> None:
                 parsed_chapter.content,
                 job.target_lang,
                 on_progress=_on_paragraph,
+                # Bản thô lưu marker nhiều nghĩa để chủ truyện chọn nghĩa sau
+                mark_alternatives=True,
+                # Mức gợi ý lấy từ MARK_LEVEL (.env); nghĩa đã chọn / khóa bỏ
+                # hỏi của riêng truyện này được áp khi dịch chương mới.
+                key_choices=key_choices,
+                skip_keys=skip_keys,
             )
+            # Chương mới: áp quy tắc "Tìm & thay thế" ApplyToFuture của truyện này
+            content_vi, replaced = glossary_service.apply_rules(
+                db, story.id, content_vi, rules=future_rules
+            )
+            if replaced:
+                logger.info("Import job %s: chương %s — áp %d chỗ thay thế",
+                            job_id, i, replaced)
             # Bỏ "第N章" ở đầu tiêu đề (còn giữ nguyên nếu bỏ hết sẽ thành rỗng)
-            title_zh = _CHAPTER_PREFIX.sub("", parsed_chapter.title).strip() or parsed_chapter.title
+            title_zh = CHAPTER_PREFIX_RE.sub("", parsed_chapter.title).strip() or parsed_chapter.title
             title_vi = translate_text(title_zh, job.target_lang).strip()
             # Mã chương + link nguồn (Qidian) để chống trùng khi thêm chương mới;
             # nguồn khác / URL không khớp định dạng → để NULL (bỏ qua).
