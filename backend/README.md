@@ -89,8 +89,7 @@ sqlcmd -S localhost -E -C -b -f 65001 -i database/migrate_story_words.sql
   mức medium). Sửa file → tự nạp khi mtime đổi, hoặc
   `POST /dictionary/mark-lists/reload`.
 
-Endpoint A3.13: `POST /stories/{id}/markers/resolve-all` (lấy nghĩa đầu cả
-truyện, snapshot để undo), `GET/POST/DELETE /stories/{id}/word-choices`,
+Endpoint A3.13: `GET/POST/DELETE /stories/{id}/word-choices`,
 `GET/POST/DELETE /stories/{id}/ignored-words` (`sourceKey` hoặc `meanings`),
 `POST /dictionary/mark-lists/reload`.
 
@@ -283,7 +282,7 @@ cd backend
 .venv/bin/python test_api.py                # Linux/macOS
 ```
 
-Chạy xong in `TẤT CẢ 326 KIỂM TRA ĐỀU PASS` (exit code 0); script tự tạo và tự xoá dữ liệu kiểm thử.
+Chạy xong in `TẤT CẢ 314 KIỂM TRA ĐỀU PASS` (exit code 0); script tự tạo và tự xoá dữ liệu kiểm thử.
 
 Bộ lọc marker riêng (không cần server): `test_marking.py` (80 kiểm tra)
 và `test_alternatives.py` (55 kiểm tra) — cùng in `TẤT CẢ ... ĐỀU PASS`.

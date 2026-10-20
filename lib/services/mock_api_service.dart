@@ -3,9 +3,12 @@ import 'dart:math';
 import '../models/chapter.dart';
 import '../models/comment.dart';
 import '../models/genre.dart';
+import '../models/glossary.dart';
 import '../models/import_job.dart';
 import '../models/story.dart';
+import '../models/story_word.dart';
 import '../models/user.dart';
+import '../utils/alternatives.dart';
 import 'api_config.dart';
 import 'api_service.dart';
 
@@ -164,6 +167,7 @@ class MockApiService implements ApiService {
   static void resetStoriesForTest() {
     _stories = _seedStories();
     _chaptersByStory = <int, List<Chapter>>{};
+    resetGlossaryForTest(); // quy tắc/thay thế gắn theo truyện → reset cùng
     _nextStoryId = 9;
     _nextChapterId = 5000000;
     _sourceBookByStory = <int, String>{};
@@ -176,7 +180,8 @@ class MockApiService implements ApiService {
     author: mock.author,
     authorId: mock.authorId,
     // Ảnh bìa người dùng nhập luôn thắng ảnh picsum ngẫu nhiên.
-    coverUrl: mock.coverUrl ??
+    coverUrl:
+        mock.coverUrl ??
         (useCoverImages
             ? 'https://picsum.photos/seed/vietread${mock.id}/400/600'
             : null),
@@ -350,30 +355,48 @@ class MockApiService implements ApiService {
   }
 
   @override
-  Future<Chapter> fetchChapter(int chapterId) async {
+  Future<Chapter> fetchChapter(int chapterId, {bool raw = false}) async {
     await _wait();
     // Ưu tiên chương đã thao tác CRUD (id do mock cấp, không quy ước).
     final Chapter? custom = _findCustomChapter(chapterId);
+    final Chapter chapter;
     if (custom != null) {
       _requireViewable(_storyOrThrow(custom.storyId));
-      return custom;
+      chapter = custom;
+    } else {
+      // Mock: id chương = storyId * 1000 + index (xem chapterIdOf)
+      final int storyId = chapterId ~/ 1000;
+      final int index = chapterId % 1000;
+      final _MockStory? mock = _mockById(storyId);
+      if (mock == null || index < 1 || index > mock.chapterCount) {
+        throw const ApiException('Không tìm thấy chương');
+      }
+      final String title =
+          'Chương $index: ${_chapterTitles[(index - 1) % _chapterTitles.length]}';
+      chapter = Chapter(
+        id: chapterId,
+        storyId: storyId,
+        index: index,
+        title: title,
+        content: _mockContent(mock, index),
+      );
     }
-    // Mock: id chương = storyId * 1000 + index (xem chapterIdOf)
-    final int storyId = chapterId ~/ 1000;
-    final int index = chapterId % 1000;
-    final _MockStory? mock = _mockById(storyId);
-    if (mock == null || index < 1 || index > mock.chapterCount) {
-      throw const ApiException('Không tìm thấy chương');
+    if (!raw) {
+      // Người đọc: bản ĐÃ resolve (không marker) — như GET /chapters/{id}.
+      return Chapter(
+        id: chapter.id,
+        storyId: chapter.storyId,
+        index: chapter.index,
+        title: chapter.title,
+        content: resolveMarkers(chapter.content),
+      );
     }
-    final String title =
-        'Chương $index: ${_chapterTitles[(index - 1) % _chapterTitles.length]}';
-    return Chapter(
-      id: chapterId,
-      storyId: storyId,
-      index: index,
-      title: title,
-      content: _mockContent(mock, index),
-    );
+    // ?raw=1 — bản thô: 401 khi chưa đăng nhập, 403 khi không phải chủ truyện.
+    if (_me == null) {
+      throw const ApiException('Chưa đăng nhập (thiếu token)', statusCode: 401);
+    }
+    _requireOwner(_storyOrThrow(chapter.storyId));
+    return chapter;
   }
 
   /// Mã hoá (storyId, index) thành id chương cho bản mock.
@@ -577,9 +600,7 @@ class MockApiService implements ApiService {
     if (_mockById(storyId) == null) {
       throw const ApiException('Không tìm thấy truyện', statusCode: 404);
     }
-    return List<Comment>.of(
-      _commentsByStory[storyId] ?? const <Comment>[],
-    );
+    return List<Comment>.of(_commentsByStory[storyId] ?? const <Comment>[]);
   }
 
   @override
@@ -606,7 +627,10 @@ class MockApiService implements ApiService {
         (chapterId ~/ 1000 != storyId ||
             chapterId % 1000 < 1 ||
             chapterId % 1000 > mock.chapterCount)) {
-      throw const ApiException('Chương không thuộc truyện này', statusCode: 400);
+      throw const ApiException(
+        'Chương không thuộc truyện này',
+        statusCode: 400,
+      );
     }
     final Comment comment = Comment(
       id: _nextCommentId++,
@@ -667,9 +691,6 @@ class MockApiService implements ApiService {
     final String host = Uri.tryParse(url)?.host.toLowerCase() ?? '';
     return const <String>[
       'qidian.com',
-      'faloo.com',
-      'fanqie.com.cn',
-      'fanqienovel.com',
       'demo.vietread.local',
     ].any((String h) => host == h || host.endsWith('.$h'));
   }
@@ -703,7 +724,8 @@ class MockApiService implements ApiService {
           id: _nextChapterId++,
           storyId: storyId,
           index: i,
-          title: 'Chương $i: ${_chapterTitles[(i - 1) % _chapterTitles.length]}',
+          title:
+              'Chương $i: ${_chapterTitles[(i - 1) % _chapterTitles.length]}',
           content:
               'Chương $i — nội dung đã dịch sang tiếng Việt từ nguồn nước ngoài.\n\n'
               '(Nội dung mẫu của MockApiService cho truyện nhập từ link — Bước 10; '
@@ -763,12 +785,10 @@ class MockApiService implements ApiService {
   Future<List<Story>> fetchMyStories() async {
     await _wait();
     final User me = _requireLogin(); // chưa đăng nhập → 401 như backend
-    final List<_MockStory> mine = _stories
-        .where((_MockStory s) => s.authorId == me.id)
-        .toList()
-      ..sort(
-        (_MockStory a, _MockStory b) => a.updatedAgo.compareTo(b.updatedAgo),
-      ); // updatedAgo nhỏ nhất = mới cập nhật
+    final List<_MockStory> mine =
+        _stories.where((_MockStory s) => s.authorId == me.id).toList()..sort(
+          (_MockStory a, _MockStory b) => a.updatedAgo.compareTo(b.updatedAgo),
+        ); // updatedAgo nhỏ nhất = mới cập nhật
     return mine.map(_toStory).toList(growable: false);
   }
 
@@ -785,7 +805,10 @@ class MockApiService implements ApiService {
     final User me = _requireLogin();
     final String cleanTitle = title.trim();
     if (cleanTitle.isEmpty) {
-      throw const ApiException('Tên truyện không được để trống', statusCode: 400);
+      throw const ApiException(
+        'Tên truyện không được để trống',
+        statusCode: 400,
+      );
     }
     if (status != 'ongoing' && status != 'completed') {
       throw const ApiException(
@@ -875,8 +898,7 @@ class MockApiService implements ApiService {
           id: chapterIdOf(mock.id, index),
           storyId: mock.id,
           index: index,
-          title:
-              'Chương $index: ${_chapterTitles[i % _chapterTitles.length]}',
+          title: 'Chương $index: ${_chapterTitles[i % _chapterTitles.length]}',
           content: _mockContent(mock, index),
         );
       });
@@ -947,10 +969,7 @@ class MockApiService implements ApiService {
         );
       }
       if (chapters.any((Chapter c) => c.index == index)) {
-        throw ApiException(
-          'Chương số $index đã tồn tại',
-          statusCode: 400,
-        );
+        throw ApiException('Chương số $index đã tồn tại', statusCode: 400);
       }
       newIndex = index;
     }
@@ -959,7 +978,8 @@ class MockApiService implements ApiService {
       storyId: storyId,
       index: newIndex,
       title: cleanTitle,
-      content: content,
+      // Chương mới: áp quy tắc ApplyToFuture của truyện (như backend).
+      content: _applyGlossary(storyId, content),
     );
     chapters.add(chapter);
     mock.chapterCount = chapters.length;
@@ -1009,13 +1029,8 @@ class MockApiService implements ApiService {
         );
       }
       final List<Chapter> siblings = _chaptersByStory[found.storyId]!;
-      if (siblings.any(
-        (Chapter c) => c != found && c.index == newIndex,
-      )) {
-        throw ApiException(
-          'Chương số $newIndex đã tồn tại',
-          statusCode: 400,
-        );
+      if (siblings.any((Chapter c) => c != found && c.index == newIndex)) {
+        throw ApiException('Chương số $newIndex đã tồn tại', statusCode: 400);
       }
     } else {
       newIndex = found.index;
@@ -1230,10 +1245,12 @@ class MockApiService implements ApiService {
     final Chapter chapter = _appendChapter(
       mock,
       index,
-      (title?.trim().isNotEmpty ?? false)
-          ? title!.trim()
-          : 'Chương $index',
-      'Nội dung đã cào và dịch từ Qidian (mô phỏng) — $url',
+      (title?.trim().isNotEmpty ?? false) ? title!.trim() : 'Chương $index',
+      // Chương mới: áp quy tắc ApplyToFuture của truyện (như backend).
+      _applyGlossary(
+        storyId,
+        'Nội dung đã cào và dịch từ Qidian (mô phỏng) — $url',
+      ),
     );
     _sourceBookByStory[storyId] = bookId;
     (_sourceChaptersByStory[storyId] ??= <String, int>{})[chapterId] = index;
@@ -1271,22 +1288,531 @@ class MockApiService implements ApiService {
       );
     }
 
-    final String firstLine = text.split('\n').firstWhere(
-          (String l) => l.trim().isNotEmpty,
-          orElse: () => '',
-        ).trim();
+    final String firstLine = text
+        .split('\n')
+        .firstWhere((String l) => l.trim().isNotEmpty, orElse: () => '')
+        .trim();
     final int index = _nextIndexFor(mock, chapterNo);
     final String? cleanTitle = (title?.trim().isNotEmpty ?? false)
         ? title!.trim()
         : null;
-    final String chapterTitle = cleanTitle ??
+    final String chapterTitle =
+        cleanTitle ??
         (firstLine.length <= 120 && firstLine.isNotEmpty
             ? firstLine
             : 'Chương $index');
     // sourceLang=vi: lưu nguyên; zh: “dịch” (mô phỏng) rồi giữ bản gốc.
-    final String content =
-        sourceLang == 'vi' ? text : 'Bản dịch (mô phỏng): $text';
-    return _appendChapter(mock, index, chapterTitle, content);
+    // Bản dịch có marker nhiều nghĩa như backend khi mark_alternatives=true.
+    final bool isZh = sourceLang == 'zh';
+    final String content = isZh
+        ? 'Bản dịch (mô phỏng): $text\n'
+              'Chỗ cần chọn nghĩa: {nghĩa một|nghĩa hai} và {Lý Minh|Lý Meanh}.'
+        : text;
+    final Chapter chapter = _appendChapter(
+      mock,
+      index,
+      chapterTitle,
+      _applyGlossary(storyId, content), // chương mới: áp quy tắc ApplyToFuture
+    );
+    if (isZh) _originalByChapter[chapter.id] = text; // bản gốc cho retranslate
+    return chapter;
+  }
+
+  // ------------------------- Sửa bản dịch: marker + thay thế ----------------
+
+  /// Bản gốc (chưa dịch) của chương nhập bằng văn bản — cho `retranslate`.
+  static Map<int, String> _originalByChapter = <int, String>{};
+
+  /// Quy tắc "Tìm & thay thế" đã lưu theo truyện (bảng `StoryGlossary`).
+  static Map<int, List<GlossaryRule>> _glossaryByStory =
+      <int, List<GlossaryRule>>{};
+
+  /// Batch thay thế gần nhất của mỗi truyện (bảng `ChapterRevisions`) —
+  /// batch mới xoá batch cũ, dùng cho `undoReplace`.
+  static Map<int, _MockReplaceBatch> _replaceBatches =
+      <int, _MockReplaceBatch>{};
+
+  static int _nextGlossaryId = 1;
+  static int _nextReplaceBatchId = 1;
+
+  /// Ý nghĩa đã chọn ("luôn dùng") / từ "không hỏi lại" THEO TRUYỆN —
+  /// bảng `StoryWordChoices` / `StoryIgnoredWords`.
+  static Map<int, List<WordChoice>> _wordChoicesByStory =
+      <int, List<WordChoice>>{};
+  static Map<int, List<IgnoredWord>> _ignoredWordsByStory =
+      <int, List<IgnoredWord>>{};
+  static int _nextWordChoiceId = 1;
+  static int _nextIgnoredWordId = 1;
+
+  /// markLevel của lần `retranslateChapter` gần nhất — widget test kiểm tra
+  /// mức gợi ý người dùng chọn có được gửi lên không.
+  static String? lastRetranslateMarkLevel;
+
+  static const Set<String> _markLevels = <String>{'low', 'medium', 'high'};
+
+  /// Xoá toàn bộ trạng thái marker/thay thế — `resetStoriesForTest` gọi kèm.
+  static void resetGlossaryForTest() {
+    _originalByChapter = <int, String>{};
+    _glossaryByStory = <int, List<GlossaryRule>>{};
+    _replaceBatches = <int, _MockReplaceBatch>{};
+    _nextGlossaryId = 1;
+    _nextReplaceBatchId = 1;
+    _wordChoicesByStory = <int, List<WordChoice>>{};
+    _ignoredWordsByStory = <int, List<IgnoredWord>>{};
+    _nextWordChoiceId = 1;
+    _nextIgnoredWordId = 1;
+    lastRetranslateMarkLevel = null;
+  }
+
+  /// Regex cho một quy tắc — khớp [buildRegex] của backend (`glossary.py`).
+  static RegExp _rulePattern(String find, bool matchCase, bool wholeWord) =>
+      RegExp(
+        wholeWord
+            ? '(?<!\\w)${RegExp.escape(find)}(?!\\w)'
+            : RegExp.escape(find),
+        caseSensitive: matchCase,
+      );
+
+  /// Số chỗ khớp trong [text].
+  static int _countMatches(String text, RegExp rx) =>
+      rx.allMatches(text).length;
+
+  /// Áp mọi quy tắc ApplyToFuture của truyện lên bản dịch chương MỚI (như backend).
+  static String _applyGlossary(int storyId, String text) {
+    for (final GlossaryRule rule
+        in _glossaryByStory[storyId] ?? const <GlossaryRule>[]) {
+      if (!rule.applyToFuture) continue;
+      text = text.replaceAll(
+        _rulePattern(rule.findText, rule.matchCase, rule.wholeWord),
+        rule.replaceText,
+      );
+    }
+    return text;
+  }
+
+  @override
+  Future<String> retranslateChapter(int chapterId, {String? markLevel}) async {
+    await _wait();
+    final Chapter chapter = _resolveChapter(chapterId);
+    _requireOwner(_storyOrThrow(chapter.storyId));
+    final String? original = _originalByChapter[chapter.id];
+    if (original == null || original.trim().isEmpty) {
+      throw const ApiException(
+        'Chương này không có bản gốc để dịch lại',
+        statusCode: 400,
+      );
+    }
+    if (markLevel != null && !_markLevels.contains(markLevel)) {
+      throw const ApiException(
+        "markLevel phải là 'low', 'medium' hoặc 'high'",
+        statusCode: 400,
+      );
+    }
+    lastRetranslateMarkLevel = markLevel;
+    // “Dịch lại” mô phỏng — marker chỉ chứa NGHĨA VIỆT như backend (`{a|b}`),
+    // dùng từ điển cá nhân (giống names.txt), rồi áp nghĩa đã chọn /
+    // "không hỏi lại" RIÊNG CỦA TRUYỆN + trần marker theo mức gợi ý.
+    final String content = _applyGlossary(
+      chapter.storyId,
+      'Bản dịch lại (mô phỏng):\n'
+          'Thiếu niên {nghĩa một|nghĩa hai|nghĩa ba} đứng trên đỉnh núi.\n'
+          'Đây là {Lý Minh|Lý Meanh} — chỗ này cần chọn nghĩa.',
+    );
+    return _applyStoryWords(
+      chapter.storyId,
+      content,
+      cap: markLevel == 'low'
+          ? 15
+          : markLevel == 'medium'
+          ? 40
+          : null,
+    );
+  }
+
+  /// Danh tính quy tắc theo marker — KHỚP cách backend tra ngược khóa:
+  /// khóa cũ (nếu client gửi) hoặc danh sách nghĩa Việt đã chuẩn hóa.
+  /// Trả `null` khi thiếu cả hai (backend trả 400).
+  static String? _identity(String? sourceKey, List<String>? meanings) {
+    if (sourceKey != null && sourceKey.isNotEmpty) return sourceKey;
+    final Set<String> clean = <String>{
+      for (final String m in meanings ?? const <String>[])
+        if (m.trim().isNotEmpty && !hasCjk(m.trim())) m.trim(),
+    };
+    if (clean.isEmpty) return null;
+    return clean.take(6).join('|');
+  }
+
+  /// Phản hồi POST kèm [affectedIds] (mock ghi 1 khóa → id duy nhất).
+  static WordChoice _withIds(WordChoice row, List<int> ids) => WordChoice(
+    id: row.id,
+    sourceKey: row.sourceKey,
+    chosenText: row.chosenText,
+    createdAt: row.createdAt,
+    affectedIds: ids,
+  );
+
+  static IgnoredWord _ignoreWithIds(IgnoredWord row, List<int> ids) =>
+      IgnoredWord(
+        id: row.id,
+        sourceKey: row.sourceKey,
+        createdAt: row.createdAt,
+        affectedIds: ids,
+      );
+
+  /// Áp “luôn dùng nghĩa” + “không hỏi lại” của truyện lên văn bản có marker,
+  /// rồi cắt về trần [cap] của mức gợi ý (marker vượt trần lấy nghĩa đầu).
+  static String _applyStoryWords(int storyId, String text, {int? cap}) {
+    final Map<String, String> choices = <String, String>{
+      for (final WordChoice c
+          in _wordChoicesByStory[storyId] ?? const <WordChoice>[])
+        c.sourceKey: c.chosenText,
+    };
+    final Set<String> skips = <String>{
+      for (final IgnoredWord w
+          in _ignoredWordsByStory[storyId] ?? const <IgnoredWord>[])
+        w.sourceKey,
+    };
+    int seen = 0;
+    final StringBuffer buf = StringBuffer();
+    int pos = 0;
+    for (final Marker marker in parseMarkers(text)) {
+      // Danh tính: khóa cũ (dữ liệu cũ) hoặc chính dãy nghĩa của marker
+      // (marker mới không còn chữ Trung) — như backend tra ngược khóa.
+      final String key = marker.key ?? marker.meanings.join('|');
+      String? replacement;
+      if (choices.containsKey(key)) {
+        replacement = choices[key];
+      } else if (skips.contains(key)) {
+        replacement = marker.first;
+      } else if (cap != null && seen >= cap) {
+        replacement = marker.first; // vượt trần mức gợi ý → lấy nghĩa đầu
+      }
+      if (replacement == null) {
+        seen += 1;
+        continue; // giữ nguyên marker
+      }
+      buf.write(text.substring(pos, marker.start));
+      buf.write(replacement);
+      pos = marker.end;
+    }
+    if (buf.isEmpty) return text;
+    buf.write(text.substring(pos));
+    return buf.toString();
+  }
+
+  // ------------------------- Gợi ý nhiều nghĩa theo truyện ----------------
+
+  @override
+  Future<List<WordChoice>> fetchWordChoices(int storyId) async {
+    await _wait();
+    _requireOwner(_storyOrThrow(storyId));
+    return List<WordChoice>.unmodifiable(
+      _wordChoicesByStory[storyId] ?? const <WordChoice>[],
+    );
+  }
+
+  @override
+  Future<WordChoice> saveWordChoice(
+    int storyId, {
+    String? sourceKey,
+    required String chosenText,
+    List<String>? meanings,
+  }) async {
+    await _wait();
+    _requireOwner(_storyOrThrow(storyId));
+    final String? identity = _identity(sourceKey, meanings);
+    if (identity == null) {
+      throw const ApiException(
+        'Cần gửi sourceKey hoặc meanings',
+        statusCode: 400,
+      );
+    }
+    final List<WordChoice> list = _wordChoicesByStory.putIfAbsent(
+      storyId,
+      () => <WordChoice>[],
+    );
+    final int i = list.indexWhere((WordChoice c) => c.sourceKey == identity);
+    if (i >= 0) {
+      final WordChoice old = list[i];
+      list[i] = WordChoice(
+        id: old.id,
+        sourceKey: old.sourceKey,
+        chosenText: chosenText,
+        createdAt: old.createdAt,
+      );
+      return _withIds(list[i], <int>[old.id]);
+    }
+    final WordChoice choice = WordChoice(
+      id: _nextWordChoiceId++,
+      sourceKey: identity,
+      chosenText: chosenText,
+      createdAt: DateTime.now(),
+    );
+    list.insert(0, choice);
+    return _withIds(choice, <int>[choice.id]);
+  }
+
+  @override
+  Future<void> deleteWordChoice(int storyId, int choiceId) async {
+    await _wait();
+    _requireOwner(_storyOrThrow(storyId));
+    final List<WordChoice> list =
+        _wordChoicesByStory[storyId] ?? const <WordChoice>[];
+    final int i = list.indexWhere((WordChoice c) => c.id == choiceId);
+    if (i < 0) {
+      throw const ApiException('Không tìm thấy nghĩa đã lưu', statusCode: 404);
+    }
+    list.removeAt(i);
+  }
+
+  @override
+  Future<List<IgnoredWord>> fetchIgnoredWords(int storyId) async {
+    await _wait();
+    _requireOwner(_storyOrThrow(storyId));
+    return List<IgnoredWord>.unmodifiable(
+      _ignoredWordsByStory[storyId] ?? const <IgnoredWord>[],
+    );
+  }
+
+  @override
+  Future<IgnoredWord> ignoreWord(
+    int storyId, {
+    String? sourceKey,
+    List<String>? meanings,
+  }) async {
+    await _wait();
+    _requireOwner(_storyOrThrow(storyId));
+    final String? identity = _identity(sourceKey, meanings);
+    if (identity == null) {
+      throw const ApiException(
+        'Cần gửi sourceKey hoặc meanings',
+        statusCode: 400,
+      );
+    }
+    final List<IgnoredWord> list = _ignoredWordsByStory.putIfAbsent(
+      storyId,
+      () => <IgnoredWord>[],
+    );
+    final int i = list.indexWhere((IgnoredWord w) => w.sourceKey == identity);
+    if (i >= 0) {
+      return _ignoreWithIds(list[i], <int>[
+        list[i].id,
+      ]); // idempotent như backend
+    }
+    final IgnoredWord word = IgnoredWord(
+      id: _nextIgnoredWordId++,
+      sourceKey: identity,
+      createdAt: DateTime.now(),
+    );
+    list.insert(0, word);
+    return _ignoreWithIds(word, <int>[word.id]);
+  }
+
+  @override
+  Future<void> deleteIgnoredWord(int storyId, int wordId) async {
+    await _wait();
+    _requireOwner(_storyOrThrow(storyId));
+    final List<IgnoredWord> list =
+        _ignoredWordsByStory[storyId] ?? const <IgnoredWord>[];
+    final int i = list.indexWhere((IgnoredWord w) => w.id == wordId);
+    if (i < 0) {
+      throw const ApiException(
+        'Không tìm thấy từ trong danh sách',
+        statusCode: 404,
+      );
+    }
+    list.removeAt(i);
+  }
+
+  @override
+  Future<ReplaceResult> replaceInStory(
+    int storyId, {
+    required String find,
+    required String replace,
+    bool matchCase = false,
+    bool wholeWord = false,
+    bool includeTitles = false,
+    bool applyToFuture = false,
+    bool dryRun = false,
+  }) async {
+    await _wait();
+    final _MockStory mock = _storyOrThrow(storyId);
+    _requireOwner(mock);
+    if (find.trim().isEmpty) {
+      throw const ApiException(
+        'Chuỗi cần tìm không được để trống',
+        statusCode: 400,
+      );
+    }
+    if (find.length > 200) {
+      throw const ApiException(
+        'Chuỗi cần tìm tối đa 200 ký tự',
+        statusCode: 400,
+      );
+    }
+    if (find == replace) {
+      throw const ApiException(
+        'Chuỗi cần tìm và chuỗi thay thế không được giống nhau',
+        statusCode: 400,
+      );
+    }
+    final RegExp rx = _rulePattern(find, matchCase, wholeWord);
+    final List<Chapter> chapters = _materializeChapters(mock);
+
+    // --- dryRun: chỉ đếm chỗ/chương, không ghi gì ---
+    final List<ReplaceChapterHit> hits = <ReplaceChapterHit>[];
+    int total = 0;
+    for (final Chapter chapter in chapters) {
+      final int matches =
+          _countMatches(chapter.content, rx) +
+          (includeTitles ? _countMatches(chapter.title, rx) : 0);
+      if (matches > 0) {
+        hits.add(
+          ReplaceChapterHit(
+            chapterId: chapter.id,
+            chapterNo: chapter.index,
+            matches: matches,
+          ),
+        );
+        total += matches;
+      }
+    }
+    if (dryRun) {
+      return ReplaceResult(dryRun: true, totalMatches: total, chapters: hits);
+    }
+
+    // --- Thay thật: snapshot trước batch để undo (1 batch gần nhất/truyện) ---
+    final String batchId = 'batch-${_nextReplaceBatchId++}';
+    final List<_MockRevision> revisions = <_MockRevision>[];
+    final Map<int, String> afterByChapter = <int, String>{};
+    final List<ReplaceChapterHit> changedHits = <ReplaceChapterHit>[];
+    int changed = 0;
+    total = 0;
+    for (int i = 0; i < chapters.length; i++) {
+      final Chapter chapter = chapters[i];
+      final int matches =
+          _countMatches(chapter.content, rx) +
+          (includeTitles ? _countMatches(chapter.title, rx) : 0);
+      if (matches == 0) continue;
+      revisions.add(
+        _MockRevision(
+          chapterId: chapter.id,
+          title: chapter.title,
+          content: chapter.content,
+        ),
+      );
+      final Chapter updated = Chapter(
+        id: chapter.id,
+        storyId: chapter.storyId,
+        index: chapter.index,
+        title: includeTitles
+            ? chapter.title.replaceAll(rx, replace)
+            : chapter.title,
+        content: chapter.content.replaceAll(rx, replace),
+      );
+      chapters[i] = updated;
+      afterByChapter[updated.id] = updated.content;
+      changed += 1;
+      total += matches;
+      changedHits.add(
+        ReplaceChapterHit(
+          chapterId: chapter.id,
+          chapterNo: chapter.index,
+          matches: matches,
+        ),
+      );
+    }
+    _replaceBatches[storyId] = _MockReplaceBatch(
+      batchId: batchId,
+      revisions: revisions,
+      afterByChapter: afterByChapter,
+    );
+    if (applyToFuture) {
+      final List<GlossaryRule> rules = _glossaryByStory.putIfAbsent(
+        storyId,
+        () => <GlossaryRule>[],
+      );
+      rules.add(
+        GlossaryRule(
+          id: _nextGlossaryId++,
+          findText: find,
+          replaceText: replace,
+          matchCase: matchCase,
+          wholeWord: wholeWord,
+          applyToFuture: true,
+          createdAt: DateTime.now(),
+        ),
+      );
+    }
+    return ReplaceResult(
+      dryRun: false,
+      totalMatches: total,
+      chapters: changedHits,
+      batchId: batchId,
+      chaptersChanged: changed,
+    );
+  }
+
+  @override
+  Future<UndoResult> undoReplace(int storyId) async {
+    await _wait();
+    final _MockStory mock = _storyOrThrow(storyId);
+    _requireOwner(mock);
+    final _MockReplaceBatch? batch = _replaceBatches.remove(storyId);
+    if (batch == null) {
+      throw const ApiException(
+        'Chưa có lần thay thế nào để hoàn tác',
+        statusCode: 400,
+      );
+    }
+    final List<Chapter> chapters = _chaptersByStory[storyId] ?? <Chapter>[];
+    int restored = 0;
+    int skipped = 0;
+    for (final _MockRevision revision in batch.revisions) {
+      final int i = chapters.indexWhere(
+        (Chapter c) => c.id == revision.chapterId,
+      );
+      // Chương bị xoá hoặc đã sửa tiếp sau batch → bỏ qua (như backend).
+      if (i < 0 ||
+          chapters[i].content != batch.afterByChapter[revision.chapterId]) {
+        skipped += 1;
+        continue;
+      }
+      chapters[i] = Chapter(
+        id: revision.chapterId,
+        storyId: storyId,
+        index: chapters[i].index,
+        title: revision.title,
+        content: revision.content,
+      );
+      restored += 1;
+    }
+    final String message =
+        'Đã hoàn tác $restored chương'
+        '${skipped > 0 ? ' — $skipped chương đã bị sửa sau đó nên bỏ qua' : ''}';
+    return UndoResult(message: message, restored: restored, skipped: skipped);
+  }
+
+  @override
+  Future<List<GlossaryRule>> fetchGlossary(int storyId) async {
+    await _wait();
+    _requireOwner(_storyOrThrow(storyId));
+    return List<GlossaryRule>.unmodifiable(
+      _glossaryByStory[storyId] ?? const <GlossaryRule>[],
+    );
+  }
+
+  @override
+  Future<void> deleteGlossaryRule(int storyId, int ruleId) async {
+    await _wait();
+    _requireOwner(_storyOrThrow(storyId));
+    final List<GlossaryRule> rules =
+        _glossaryByStory[storyId] ?? const <GlossaryRule>[];
+    final int i = rules.indexWhere((GlossaryRule r) => r.id == ruleId);
+    if (i < 0) {
+      throw const ApiException('Không tìm thấy quy tắc', statusCode: 404);
+    }
+    rules.removeAt(i);
   }
 
   /// Nội dung chương mẫu (đủ dấu tiếng Việt) cho bản mock.
@@ -1341,6 +1867,36 @@ class _MockStory {
   bool isDraft;
 }
 
+/// Batch thay thế gần nhất của một truyện — mô phỏng `ChapterRevisions`
+/// (chỉ giữ 1 batch gần nhất, batch mới xoá batch cũ).
+class _MockReplaceBatch {
+  _MockReplaceBatch({
+    required this.batchId,
+    required this.revisions,
+    required this.afterByChapter,
+  });
+
+  final String batchId;
+  final List<_MockRevision> revisions;
+
+  /// Nội dung MỖI chương sau khi batch thay thế — chương nào bị sửa tiếp
+  /// (khác giá trị này) thì undo bỏ qua, giống `UpdatedAt > snapshot` ở backend.
+  final Map<int, String> afterByChapter;
+}
+
+/// Snapshot một chương TRƯỚC batch thay thế (title + content).
+class _MockRevision {
+  _MockRevision({
+    required this.chapterId,
+    required this.title,
+    required this.content,
+  });
+
+  final int chapterId;
+  final String title;
+  final String content;
+}
+
 /// Import job trong mock — mô phỏng worker backend chạy nền (Bước 10):
 /// mỗi lần app poll lại "advance" một bước: Pending → Running (%) → Done/Failed.
 class _MockImportJob {
@@ -1384,8 +1940,8 @@ class _MockImportJob {
       status = 'Failed';
       final String host = Uri.parse(sourceUrl).host;
       error =
-          "Nguồn '$host' chưa được hỗ trợ — hiện hỗ trợ "
-          'Qidian, B.faloo, Fanqie và nguồn demo demo.vietread.local';
+          "Nguồn '$host' chưa được hỗ trợ — hiện chỉ hỗ trợ "
+          'Qidian và nguồn demo demo.vietread.local';
       return;
     }
     status = 'Done';

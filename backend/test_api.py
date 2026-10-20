@@ -959,7 +959,7 @@ check("xoá lại từ đã xoá → 404",
 check("dọn truyện kiểm thử từ điển",
       client.delete(f"/stories/{dict_sid}", headers=auth(tac_gia)).status_code == 200)
 
-print("\n=== GỢI Ý NGHĨA: MỨC, NGHĨA ĐÃ CHỌN, KHÔNG HỎI LẠI, RESOLVE-ALL ===")
+print("\n=== GỢI Ý NGHĨA: MỨC, NGHĨA ĐÃ CHỌN, KHÔNG HỎI LẠI ===")
 
 
 def mk_markers(text: str) -> list[str]:
@@ -1023,7 +1023,7 @@ check(f"mức Ít ≤ 15 marker/chương (thực tế {n_low})",
       1 <= n_low <= 15, str(n_low))
 r = client.post(f"/chapters/{mk_ch1}/retranslate", json={"markLevel": "high"},
                 headers=auth(tac_gia))
-rt_high_ref = r.json()["content"]  # bản dịch lại mức Nhiều — so lại sau resolve-all
+rt_high_ref = r.json()["content"]  # bản dịch lại mức Nhiều — so mức Ít/Nhiều
 n_high = len(mk_markers(rt_high_ref))
 check(f"mức Nhiều ≥ mức Ít ({n_high} ≥ {n_low})", n_high >= n_low)
 check("retranslate KHÔNG tự lưu",
@@ -1049,55 +1049,6 @@ r = client.post(f"/stories/{mk_sid}/chapters/import-text",
                 headers=auth(tac_gia))
 check("import-text markLevel sai → 400",
       r.status_code == 400 and "markLevel" in r.json()["message"], r.text)
-
-# --- resolve-all + hoàn tác ---
-r = client.post(f"/stories/{mk_sid}/markers/resolve-all", headers=auth(doc_gia))
-check("resolve-all người khác → 403", r.status_code == 403, r.text)
-r = client.post("/stories/999999/markers/resolve-all", headers=auth(tac_gia))
-check("resolve-all truyện không tồn tại → 404",
-      r.status_code == 404 and "message" in r.json(), r.text)
-r = client.post(f"/stories/{mk_sid}/markers/resolve-all", json={},
-                headers=auth(tac_gia))
-ra = r.json()
-check("resolve-all = 200 {message, batchId, chaptersChanged, markersResolved}",
-      r.status_code == 200
-      and {"message", "batchId", "chaptersChanged", "markersResolved"} <= set(ra),
-      r.text)
-check("resolve-all đếm đúng chỗ đã resolve",
-      ra["markersResolved"] >= 1 and ra["chaptersChanged"] >= 1, str(ra))
-raw_after = client.get(f"/chapters/{mk_ch1}?raw=1",
-                       headers=auth(tac_gia)).json()["content"]
-check("sau resolve-all: 0 marker, giữ nghĩa đầu",
-      mk_markers(raw_after) == [] and "bái kiến" in raw_after, raw_after[:200])
-check("resolve-all không đổi OriginalContent (dịch lại vẫn ra y bản cũ)",
-      client.post(f"/chapters/{mk_ch1}/retranslate",
-                  json={"markLevel": "high"},
-                  headers=auth(tac_gia)).json()["content"]
-      == rt_high_ref, "khác bản trước resolve-all")
-r = client.post(f"/stories/{mk_sid}/replace/undo", headers=auth(tac_gia))
-check("undo resolve-all = 200", r.status_code == 200 and r.json()["restored"] >= 1,
-      r.text)
-check("sau undo: marker trở lại đúng như cũ",
-      client.get(f"/chapters/{mk_ch1}?raw=1",
-                 headers=auth(tac_gia)).json()["content"] == raw1)
-r = client.post(f"/stories/{mk_sid}/markers/resolve-all",
-                json={"onlyChapterId": mk_ch1}, headers=auth(tac_gia))
-check("resolve-all onlyChapterId → chỉ 1 chương",
-      r.status_code == 200 and r.json()["chaptersChanged"] == 1, r.text)
-r = client.post(f"/stories/{mk_sid}/markers/resolve-all",
-                json={"onlyChapterId": mk_ch1}, headers=auth(tac_gia))
-check("chương đã hết marker → 400 rõ ràng",
-      r.status_code == 400 and "message" in r.json(), r.text)
-r = client.post(f"/stories/{mk_sid}/markers/resolve-all",
-                json={"onlyChapterId": 999999}, headers=auth(tac_gia))
-check("onlyChapterId không thuộc truyện → 404",
-      r.status_code == 404, r.text)
-# để sạch cho phần kiểm tra word-choice: resolve nốt chương 2 rồi undo về ban đầu
-client.post(f"/stories/{mk_sid}/markers/resolve-all", headers=auth(tac_gia))
-client.post(f"/stories/{mk_sid}/replace/undo", headers=auth(tac_gia))
-check("trạng thái ban đầu phục hồi (chương 1 có marker)",
-      JG in client.get(f"/chapters/{mk_ch1}?raw=1",
-                       headers=auth(tac_gia)).json()["content"])
 
 # --- “Luôn dùng nghĩa này cho truyện này” (StoryWordChoices) ---
 r = client.post(f"/stories/{mk_sid}/word-choices",
@@ -1353,7 +1304,7 @@ r = client.post(f"/stories/{mk_sid}/markers/clean", json={},
 check("clean lần nữa → 400 (không còn chữ Hán)",
       r.status_code == 400 and "message" in r.json(), r.text)
 r = client.post(f"/stories/{mk_sid}/replace/undo", headers=auth(tac_gia))
-check("undo clean = 200 (có snapshot như resolve-all)",
+check("undo clean = 200 (có snapshot hoàn tác)",
       r.status_code == 200 and r.json().get("restored", 0) >= 1, r.text)
 db = SessionLocal()
 _restored = db.get(ChapterRow, mk_ch1).content

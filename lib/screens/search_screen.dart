@@ -15,7 +15,12 @@ import 'story_detail_screen.dart';
 ///
 /// Gọi `GET /stories?query=&genre=&status=&sort=` — backend đã có sẵn từ Bước 2.
 class SearchScreen extends StatefulWidget {
-  const SearchScreen({super.key, this.api, this.initialQuery, this.initialGenre});
+  const SearchScreen({
+    super.key,
+    this.api,
+    this.initialQuery,
+    this.initialGenre,
+  });
 
   /// Tiêm nguồn dữ liệu (test dùng mock, app thật dùng HTTP).
   final ApiService? api;
@@ -153,7 +158,8 @@ class _SearchScreenState extends State<SearchScreen> {
                     GenreChip(
                       label: g.name,
                       selected: _genre == g.name,
-                      onTap: () => _applyGenre(_genre == g.name ? null : g.name),
+                      onTap: () =>
+                          _applyGenre(_genre == g.name ? null : g.name),
                     ),
                   ],
                 ],
@@ -206,7 +212,10 @@ class _SearchScreenState extends State<SearchScreen> {
               child: FutureBuilder<List<Story>>(
                 future: _results,
                 builder:
-                    (BuildContext context, AsyncSnapshot<List<Story>> snapshot) {
+                    (
+                      BuildContext context,
+                      AsyncSnapshot<List<Story>> snapshot,
+                    ) {
                       // --- Đang tải: skeleton lưới 2 cột ---
                       if (snapshot.connectionState != ConnectionState.done) {
                         return const _ResultsSkeleton();
@@ -233,7 +242,7 @@ class _SearchScreenState extends State<SearchScreen> {
                               icon: Icons.search_off_rounded,
                               title: 'Không tìm thấy truyện nào',
                               message:
-                                      'Thử đổi từ khoá hoặc bỏ bớt bộ lọc nhé!',
+                                  'Thử đổi từ khoá hoặc bỏ bớt bộ lọc nhé!',
                             ),
                           ],
                         );

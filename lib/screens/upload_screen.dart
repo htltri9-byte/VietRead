@@ -99,9 +99,9 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   Future<void> _openLogin() async {
-    await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(builder: (_) => const AuthScreen()),
-    );
+    await Navigator.of(
+      context,
+    ).push<bool>(MaterialPageRoute<bool>(builder: (_) => const AuthScreen()));
     // AuthService.notifyListeners → builder tự gọi _syncUser.
   }
 
@@ -156,7 +156,9 @@ class _UploadScreenState extends State<UploadScreen> {
       );
       _load();
     } catch (e) {
-      _showMessage(e is ApiException ? e.message : 'Không cập nhật được truyện.');
+      _showMessage(
+        e is ApiException ? e.message : 'Không cập nhật được truyện.',
+      );
     }
   }
 
@@ -243,8 +245,7 @@ class _UploadScreenState extends State<UploadScreen> {
             const EmptyState(
               icon: Icons.edit_note_outlined,
               title: 'Đăng nhập để đăng truyện',
-              message:
-                  'Tạo tác phẩm của riêng bạn: thêm chương, lưu nháp rồi đăng công khai.',
+              message: 'Tạo tác phẩm của riêng bạn: thêm chương, lưu nháp rồi đăng công khai.',
             ),
             const SizedBox(height: 8),
             FilledButton.icon(

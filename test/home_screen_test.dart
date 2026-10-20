@@ -176,24 +176,25 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('chạm chip thể loại → mở màn Tìm kiếm & lọc với thể loại chọn sẵn', (
-    WidgetTester tester,
-  ) async {
-    await pumpHome(tester, mockApi());
-    await tester.pump(const Duration(milliseconds: 150));
-    await tester.pump();
+  testWidgets(
+    'chạm chip thể loại → mở màn Tìm kiếm & lọc với thể loại chọn sẵn',
+    (WidgetTester tester) async {
+      await pumpHome(tester, mockApi());
+      await tester.pump(const Duration(milliseconds: 150));
+      await tester.pump();
 
-    // Dùng chip "Tiên Hiệp" (luôn nằm trong vùng nhìn thấy của hàng cuộn ngang)
-    await tester.tap(find.text('Tiên Hiệp').first);
-    await tester.pumpAndSettle();
+      // Dùng chip "Tiên Hiệp" (luôn nằm trong vùng nhìn thấy của hàng cuộn ngang)
+      await tester.tap(find.text('Tiên Hiệp').first);
+      await tester.pumpAndSettle();
 
-    // Mở màn Tìm kiếm & lọc (A3.3) thay cho snackbar "chưa làm"
-    expect(find.byType(SearchScreen), findsOneWidget);
-    expect(find.textContaining('sẽ có ở bước tiếp theo'), findsNothing);
-    // Chip "Tiên Hiệp" trong màn tìm kiếm đang được chọn (chỉ 1)
-    expect(find.text('Tiên Hiệp'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
+      // Mở màn Tìm kiếm & lọc (A3.3) thay cho snackbar "chưa làm"
+      expect(find.byType(SearchScreen), findsOneWidget);
+      expect(find.textContaining('sẽ có ở bước tiếp theo'), findsNothing);
+      // Chip "Tiên Hiệp" trong màn tìm kiếm đang được chọn (chỉ 1)
+      expect(find.text('Tiên Hiệp'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('chạm ô tìm kiếm → mở màn Tìm kiếm & lọc', (
     WidgetTester tester,

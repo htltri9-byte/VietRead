@@ -1,11 +1,8 @@
-"""Gợi ý nhiều nghĩa theo truyện — resolve-all/clean + nghĩa đã chọn / bỏ hỏi.
+"""Gợi ý nhiều nghĩa theo truyện — dọn marker (clean) + nghĩa đã chọn / bỏ hỏi.
 
-- ``POST /stories/{id}/markers/resolve-all`` — với mọi chương của truyện, lấy
-  **nghĩa đầu** cho toàn bộ marker (dọn chương đã dịch trước khi có bộ lọc);
-  snapshot vào ``ChapterRevisions`` để hoàn tác bằng
-  ``POST /stories/{id}/replace/undo``. Body tuỳ chọn ``{ onlyChapterId? }``.
 - ``POST /stories/{id}/markers/clean`` — dọn chữ Hán/khóa cũ khỏi marker của
-  dữ liệu cũ (``{为|vì|là|vi}`` → ``{vì|là|vi}``), cũng snapshot hoàn tác được.
+  dữ liệu cũ (``{为|vì|là|vi}`` → ``{vì|là|vi}``), snapshot vào
+  ``ChapterRevisions`` để hoàn tác bằng ``POST /stories/{id}/replace/undo``.
 - ``GET/POST /stories/{id}/word-choices`` + ``DELETE .../word-choices/{cid}`` —
   "Luôn dùng nghĩa này cho truyện này": dịch/dịch lại chương của truyện đó tự
   dùng đúng nghĩa, không tạo marker (bảng ``StoryWordChoices``).
@@ -58,82 +55,8 @@ router = APIRouter(tags=["markers"])
 
 
 # ---------------------------------------------------------------------------
-# Dọn marker: lấy nghĩa đầu cho cả truyện (hoàn tác được)
+# Dọn marker: dọn chữ Hán dữ liệu cũ (hoàn tác được)
 # ---------------------------------------------------------------------------
-
-
-@router.post(
-    "/stories/{story_id}/markers/resolve-all",
-    response_model=ResolveAllOut,
-)
-def resolve_all_markers(
-    story_id: int,
-    payload: ResolveAllRequest | None = None,
-    db: Session = Depends(get_db),
-    user: User = Depends(security.get_current_user),
-) -> ResolveAllOut:
-    """Lấy nghĩa đầu cho mọi marker của truyện (chỉ chủ truyện).
-
-    Chương có marker được snapshot vào `ChapterRevisions` trước khi đổi — một
-    batch gần nhất/truyện như tìm & thay thế, hoàn tác bằng
-    ``POST /stories/{id}/replace/undo``. `onlyChapterId` (body tuỳ chọn) để
-    chỉ xử lý 1 chương. Không đụng `OriginalContent`, không đụng truyện khác.
-    """
-    story = get_owned_story(db, story_id, user)
-    query = select(Chapter).where(Chapter.story_id == story_id).order_by(
-        Chapter.chapter_index
-    )
-    if payload is not None and payload.only_chapter_id is not None:
-        query = query.where(Chapter.id == payload.only_chapter_id)
-    rows = list(db.execute(query).scalars().all())
-    if payload is not None and payload.only_chapter_id is not None and not rows:
-        raise HTTPException(
-            status_code=404, detail="Không tìm thấy chương trong truyện này"
-        )
-
-    batch_id = str(uuid.uuid4())
-    batch_at = utc_now()  # mốc để undo phát hiện chương bị sửa tiếp sau batch
-    # Chỉ giữ 1 batch gần nhất cho mỗi truyện → xoá batch cũ trước khi ghi batch mới.
-    db.execute(sa_delete(ChapterRevision).where(ChapterRevision.story_id == story_id))
-
-    changed = 0
-    resolved_total = 0
-    for chapter in rows:
-        before = alternatives.count(chapter.content)
-        if not before:
-            continue
-        db.add(
-            ChapterRevision(
-                chapter_id=chapter.id,
-                story_id=story_id,
-                title=chapter.title,
-                content=chapter.content,
-                batch_id=batch_id,
-                created_at=batch_at,
-            )
-        )
-        chapter.content = alternatives.resolve(chapter.content, "first")
-        chapter.updated_at = batch_at  # đúng mốc batch → undo so sánh được
-        changed += 1
-        resolved_total += before
-
-    if changed == 0:
-        db.rollback()
-        raise HTTPException(
-            status_code=400,
-            detail="Không còn chỗ nhiều nghĩa nào để lấy nghĩa đầu",
-        )
-
-    story.updated_at = utc_now()
-    db.commit()
-
-    target = f"chương {rows[0].chapter_index}" if payload and payload.only_chapter_id else f"{changed} chương"
-    return ResolveAllOut(
-        message=f"Đã lấy nghĩa đầu {resolved_total} chỗ trong {target}",
-        batchId=batch_id,
-        chaptersChanged=changed,
-        markersResolved=resolved_total,
-    )
 
 
 @router.post(
@@ -151,7 +74,7 @@ def clean_markers(
     Dữ liệu cũ ``{为|vì|là|vi}`` → ``{vì|là|vi}``; sau khi loại còn < 2 nghĩa
     thì giữ nghĩa đầu Việt còn lại và bỏ ``{}``. Chương có đổi được snapshot
     vào ``ChapterRevisions`` — hoàn tác bằng ``POST /stories/{id}/replace/undo``
-    (một batch gần nhất/truyện như resolve-all). `onlyChapterId` body tuỳ chọn.
+    (một batch gần nhất/truyện). `onlyChapterId` body tuỳ chọn.
     Không đụng `OriginalContent`, không đụng truyện khác.
     """
     story = get_owned_story(db, story_id, user)

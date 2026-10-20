@@ -85,7 +85,10 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
-      MaterialApp(theme: AppTheme.light(), home: UploadScreen(api: mock)),
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: UploadScreen(api: mock),
+      ),
     );
 
     // Frame đầu vẫn đang tải → thấy khối skeleton, chưa thấy nội dung.
@@ -126,7 +129,10 @@ void main() {
 
     expect(find.byType(EmptyState), findsOneWidget);
     expect(find.text('Chưa có truyện nào'), findsOneWidget);
-    expect(find.widgetWithText(FloatingActionButton, 'Truyện mới'), findsOneWidget);
+    expect(
+      find.widgetWithText(FloatingActionButton, 'Truyện mới'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('tạo truyện mới → hiện trong danh sách kèm chip "Nháp"', (
@@ -166,7 +172,10 @@ void main() {
     expect(find.byType(ChapterManagerScreen), findsOneWidget);
     expect(find.text('Truyện Quản Lý'), findsOneWidget); // header
     expect(find.text('Chưa có chương nào'), findsOneWidget);
-    expect(find.widgetWithText(FloatingActionButton, 'Chương mới'), findsOneWidget);
+    expect(
+      find.widgetWithText(FloatingActionButton, 'Chương mới'),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -182,7 +191,10 @@ void main() {
     // (route còn nằm trong transition nên finder phải kể cả widget ẩn).
     await tester.tap(find.byType(ListTile).first);
     await tester.pump();
-    expect(find.byType(ChapterManagerScreen, skipOffstage: false), findsOneWidget);
+    expect(
+      find.byType(ChapterManagerScreen, skipOffstage: false),
+      findsOneWidget,
+    );
     expect(find.byType(ListSkeleton, skipOffstage: false), findsOneWidget);
 
     await tester.pumpAndSettle();

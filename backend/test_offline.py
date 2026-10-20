@@ -11,7 +11,6 @@ Hai lớp chứng minh:
    toàn bộ các bước dịch/đánh dấu qua API in-process:
      - POST /stories/{id}/chapters/import-text (zh) — bước dịch khi import
      - POST /chapters/{id}/retranslate              — dịch lại
-     - POST /stories/{id}/markers/resolve-all       — dọn marker
      - translate_text(...) trực tiếp                 — lõi dịch
    Mọi bước phải chạy xong (không lỗi, không lời gọi mạng bị chặn). Vòng lặp
    chỉ cho phép loopback (SQL Server local qua ODBC/shared memory) — mọi kết
@@ -145,19 +144,10 @@ try:
               and not any(alternatives.has_cjk(m.text) for m in _mk2),
               r.text[:300])
 
-        # (c) Resolve-all — mặt trận dọn marker
-        r = c.post(f"/stories/{sid}/markers/resolve-all", json={}, headers=h)
-        check("resolve-all offline = 200, resolve ≥1 chỗ",
-              r.status_code == 200 and r.json().get("markersResolved", 0) >= 1,
-              r.text[:300])
-        r = c.post(f"/stories/{sid}/replace/undo", headers=h)
-        check("undo resolve-all = 200 (cũng offline)",
-              r.status_code == 200, r.text[:300])
-
         check("dọn truyện test = 200",
               c.delete(f"/stories/{sid}", headers=h).status_code == 200)
 
-    # (d) Lõi dịch trực tiếp dưới socket bị chặn
+    # (c) Lõi dịch trực tiếp dưới socket bị chặn
     out = vietphrase.convert("他见过她。", mark_alternatives=True, mark_level="low")
     check("translate_text (vietphrase.convert) chạy offline", "{" in out, out)
 

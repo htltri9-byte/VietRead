@@ -6,8 +6,10 @@ import 'package:http/http.dart' as http;
 import '../models/chapter.dart';
 import '../models/comment.dart';
 import '../models/genre.dart';
+import '../models/glossary.dart';
 import '../models/import_job.dart';
 import '../models/story.dart';
+import '../models/story_word.dart';
 import '../models/user.dart';
 import 'api_config.dart';
 import 'mock_api_service.dart';
@@ -64,7 +66,11 @@ abstract class ApiService {
   });
 
   /// GET /chapters/{id} — nội dung chương (Bước 5).
-  Future<Chapter> fetchChapter(int chapterId);
+  ///
+  /// Mặc định trả bản **đã resolve** (bỏ marker nhiều nghĩa) cho người đọc;
+  /// `raw: true` (`?raw=1`) trả bản thô có marker — chỉ chủ truyện dùng khi
+  /// sửa chương để chọn nghĩa.
+  Future<Chapter> fetchChapter(int chapterId, {bool raw = false});
 
   // ------------------------- Xác thực (Bước 6) -------------------------
 
@@ -186,6 +192,74 @@ abstract class ApiService {
     int? chapterNo,
     String? title,
   });
+
+  // ------------------------- Sửa bản dịch: marker + thay thế ----------------
+
+  /// POST /chapters/{id}/retranslate — dịch lại từ `OriginalContent` bằng từ
+  /// điển hiện tại (có marker). **Trả về để nạp vào màn Sửa chương, không lưu**
+  /// — chỉ lưu khi người dùng bấm Lưu. [markLevel] — mức gợi ý
+  /// (`low`/`medium`/`high`); `null` giữ nguyên trần mặc định của backend.
+  Future<String> retranslateChapter(int chapterId, {String? markLevel});
+
+  /// POST /stories/{id}/replace — tìm & thay thế trong MỘT truyện.
+  /// `dryRun: true` chỉ đếm chỗ/chương, không ghi gì; thay thật trả `batchId`
+  /// để gọi [undoReplace]. Thao tác trên bản thô (kể cả bên trong marker).
+  Future<ReplaceResult> replaceInStory(
+    int storyId, {
+    required String find,
+    required String replace,
+    bool matchCase = false,
+    bool wholeWord = false,
+    bool includeTitles = false,
+    bool applyToFuture = false,
+    bool dryRun = false,
+  });
+
+  /// POST /stories/{id}/replace/undo — hoàn tác batch gần nhất; chương đã bị
+  /// sửa tiếp sau batch thì bỏ qua và được báo trong `skipped`.
+  Future<UndoResult> undoReplace(int storyId);
+
+  /// GET /stories/{id}/glossary — quy tắc (A → B) đã lưu của truyện.
+  Future<List<GlossaryRule>> fetchGlossary(int storyId);
+
+  /// DELETE /stories/{id}/glossary/{ruleId} — xoá một quy tắc.
+  Future<void> deleteGlossaryRule(int storyId, int ruleId);
+
+  // ------------------------- Gợi ý nhiều nghĩa theo truyện ----------------
+
+  /// GET /stories/{id}/word-choices — nghĩa đã chọn ("luôn dùng") của truyện.
+  Future<List<WordChoice>> fetchWordChoices(int storyId);
+
+  /// POST /stories/{id}/word-choices — chọn nghĩa cho marker (upsert).
+  ///
+  /// Gửi **danh sách nghĩa của marker** ([meanings]) — backend tra ngược khóa
+  /// từ điển (mọi khóa trùng danh sách nghĩa) thay vì nhận chữ Hán.
+  /// [sourceKey] chỉ kèm khi marker là dữ liệu cũ còn khóa (tương thích).
+  Future<WordChoice> saveWordChoice(
+    int storyId, {
+    String? sourceKey,
+    required String chosenText,
+    List<String>? meanings,
+  });
+
+  /// DELETE /stories/{id}/word-choices/{choiceId} — bỏ nghĩa đã chọn.
+  Future<void> deleteWordChoice(int storyId, int choiceId);
+
+  /// GET /stories/{id}/ignored-words — từ đã đánh dấu “không hỏi lại”.
+  Future<List<IgnoredWord>> fetchIgnoredWords(int storyId);
+
+  /// POST /stories/{id}/ignored-words — “Không hỏi lại nữa” cho marker.
+  ///
+  /// Tương tự [saveWordChoice]: gửi [meanings] (khóa để backend tra ngược),
+  /// [sourceKey] chỉ kèm với dữ liệu cũ còn khóa.
+  Future<IgnoredWord> ignoreWord(
+    int storyId, {
+    String? sourceKey,
+    List<String>? meanings,
+  });
+
+  /// DELETE /stories/{id}/ignored-words/{wordId} — bật lại câu hỏi.
+  Future<void> deleteIgnoredWord(int storyId, int wordId);
 }
 
 /// Gọi REST API thật của backend FastAPI.
@@ -352,8 +426,11 @@ class HttpApiService implements ApiService {
   }
 
   @override
-  Future<Chapter> fetchChapter(int chapterId) async {
-    final dynamic data = await _get('/chapters/$chapterId');
+  Future<Chapter> fetchChapter(int chapterId, {bool raw = false}) async {
+    final dynamic data = await _get(
+      '/chapters/$chapterId',
+      query: raw ? <String, String>{'raw': '1'} : null,
+    );
     if (data is! Map<String, dynamic>) {
       throw const ApiException('Nội dung chương không hợp lệ.');
     }
@@ -443,7 +520,10 @@ class HttpApiService implements ApiService {
     if (data is! List) {
       throw const ApiException('Danh sách bình luận không hợp lệ.');
     }
-    return data.whereType<Map<String, dynamic>>().map(Comment.fromJson).toList();
+    return data
+        .whereType<Map<String, dynamic>>()
+        .map(Comment.fromJson)
+        .toList();
   }
 
   @override
@@ -516,7 +596,8 @@ class HttpApiService implements ApiService {
       '/stories',
       payload: <String, dynamic>{
         'title': title.trim(),
-        if (_cleanField(description) != null) 'description': _cleanField(description),
+        if (_cleanField(description) != null)
+          'description': _cleanField(description),
         if (_cleanField(coverUrl) != null) 'coverUrl': _cleanField(coverUrl),
         'status': status,
         'genres': genres,
@@ -672,5 +753,159 @@ class HttpApiService implements ApiService {
       timeout: ApiConfig.importChapterTimeout,
     );
     return _readChapter(data);
+  }
+
+  // ------------------------- Sửa bản dịch: marker + thay thế ----------------
+
+  @override
+  Future<String> retranslateChapter(int chapterId, {String? markLevel}) async {
+    final dynamic data = await _request(
+      'POST',
+      '/chapters/$chapterId/retranslate',
+      payload: markLevel == null
+          ? null
+          : <String, dynamic>{'markLevel': markLevel},
+    );
+    if (data is! Map<String, dynamic> || data['content'] is! String) {
+      throw const ApiException('Phản hồi dịch lại chương không hợp lệ.');
+    }
+    return data['content'] as String;
+  }
+
+  @override
+  Future<ReplaceResult> replaceInStory(
+    int storyId, {
+    required String find,
+    required String replace,
+    bool matchCase = false,
+    bool wholeWord = false,
+    bool includeTitles = false,
+    bool applyToFuture = false,
+    bool dryRun = false,
+  }) async {
+    final dynamic data = await _request(
+      'POST',
+      '/stories/$storyId/replace',
+      payload: <String, dynamic>{
+        'find': find,
+        'replace': replace,
+        'matchCase': matchCase,
+        'wholeWord': wholeWord,
+        'includeTitles': includeTitles,
+        'applyToFuture': applyToFuture,
+        'dryRun': dryRun,
+      },
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Phản hồi tìm & thay thế không hợp lệ.');
+    }
+    return ReplaceResult.fromJson(data);
+  }
+
+  @override
+  Future<UndoResult> undoReplace(int storyId) async {
+    final dynamic data = await _request(
+      'POST',
+      '/stories/$storyId/replace/undo',
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Phản hồi hoàn tác không hợp lệ.');
+    }
+    return UndoResult.fromJson(data);
+  }
+
+  @override
+  Future<List<GlossaryRule>> fetchGlossary(int storyId) async {
+    final dynamic data = await _get('/stories/$storyId/glossary');
+    if (data is! List) {
+      throw const ApiException('Danh sách quy tắc không hợp lệ.');
+    }
+    return data
+        .whereType<Map<String, dynamic>>()
+        .map(GlossaryRule.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<void> deleteGlossaryRule(int storyId, int ruleId) async {
+    await _request('DELETE', '/stories/$storyId/glossary/$ruleId');
+  }
+
+  // ------------------------- Gợi ý nhiều nghĩa theo truyện ----------------
+
+  @override
+  Future<List<WordChoice>> fetchWordChoices(int storyId) async {
+    final dynamic data = await _get('/stories/$storyId/word-choices');
+    if (data is! List) {
+      throw const ApiException('Danh sách nghĩa đã chọn không hợp lệ.');
+    }
+    return data
+        .whereType<Map<String, dynamic>>()
+        .map(WordChoice.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<WordChoice> saveWordChoice(
+    int storyId, {
+    String? sourceKey,
+    required String chosenText,
+    List<String>? meanings,
+  }) async {
+    final dynamic data = await _request(
+      'POST',
+      '/stories/$storyId/word-choices',
+      payload: <String, dynamic>{
+        if (sourceKey != null && sourceKey.isNotEmpty) 'sourceKey': sourceKey,
+        'chosenText': chosenText,
+        if (meanings != null && meanings.isNotEmpty) 'meanings': meanings,
+      },
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Phản hồi lưu nghĩa không hợp lệ.');
+    }
+    return WordChoice.fromJson(data);
+  }
+
+  @override
+  Future<void> deleteWordChoice(int storyId, int choiceId) async {
+    await _request('DELETE', '/stories/$storyId/word-choices/$choiceId');
+  }
+
+  @override
+  Future<List<IgnoredWord>> fetchIgnoredWords(int storyId) async {
+    final dynamic data = await _get('/stories/$storyId/ignored-words');
+    if (data is! List) {
+      throw const ApiException('Danh sách từ đã bỏ qua không hợp lệ.');
+    }
+    return data
+        .whereType<Map<String, dynamic>>()
+        .map(IgnoredWord.fromJson)
+        .toList();
+  }
+
+  @override
+  Future<IgnoredWord> ignoreWord(
+    int storyId, {
+    String? sourceKey,
+    List<String>? meanings,
+  }) async {
+    final dynamic data = await _request(
+      'POST',
+      '/stories/$storyId/ignored-words',
+      payload: <String, dynamic>{
+        if (sourceKey != null && sourceKey.isNotEmpty) 'sourceKey': sourceKey,
+        if (meanings != null && meanings.isNotEmpty) 'meanings': meanings,
+      },
+    );
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Phản hồi bỏ qua từ không hợp lệ.');
+    }
+    return IgnoredWord.fromJson(data);
+  }
+
+  @override
+  Future<void> deleteIgnoredWord(int storyId, int wordId) async {
+    await _request('DELETE', '/stories/$storyId/ignored-words/$wordId');
   }
 }

@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../models/chapter.dart';
@@ -9,18 +8,23 @@ import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/offline_service.dart';
 import '../services/reading_progress_store.dart';
-import '../theme/app_theme.dart';
-import '../widgets/chip_genre.dart';
-import '../widgets/empty_state.dart';
-import '../widgets/error_state.dart';
-import '../widgets/skeleton.dart';
-import '../widgets/story_card.dart';
+import '../widgets/chapter_list_section.dart';
+import '../widgets/comment_section.dart';
+import '../widgets/download_dialogs.dart';
+import '../widgets/story_action_buttons.dart';
+import '../widgets/story_header.dart';
+import '../widgets/tab_pill.dart';
 import 'auth_screen.dart';
 import 'reader_screen.dart';
 
 /// Màn **chi tiết truyện** (A3.4): bìa, tên, tác giả, thể loại, mô tả, điểm,
 /// trạng thái, danh sách chương (phân trang), nút Đọc/Đọc tiếp, Theo dõi,
 /// Tải offline và tab Bình luận.
+///
+/// Phần giao diện được tách thành widget độc lập: [StoryHeader],
+/// [StoryActionButtons], [TabPill], [ChapterListSection], [CommentSection]
+/// và các dialog trong `widgets/download_dialogs.dart` — State này giữ toàn
+/// bộ trạng thái + logic (tải chương, theo dõi, tải offline, bình luận).
 class StoryDetailScreen extends StatefulWidget {
   const StoryDetailScreen({super.key, required this.story, this.api});
 
@@ -274,165 +278,22 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
     _rangeTo?.dispose();
     _rangeFrom = TextEditingController(text: '1');
     _rangeTo = TextEditingController(text: '$total');
-    bool showRange = false;
-    String? rangeError;
-
-    await showDialog<void>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return StatefulBuilder(
-          builder: (BuildContext dialogContext, StateSetter setDialogState) {
-            Widget content;
-            List<Widget> actions;
-            if (!showRange) {
-              content = Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Truyện có $total chương. Chọn phạm vi muốn lưu vào máy '
-                    'để đọc được khi mất mạng.',
-                    style: Theme.of(dialogContext).textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: () {
-                        Navigator.of(dialogContext).pop();
-                        _startDownload();
-                      },
-                      icon: const Icon(Icons.download_rounded, size: 18),
-                      label: Text('Tải toàn bộ ($total chương)'),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () => setDialogState(() => showRange = true),
-                      icon: const Icon(Icons.toc_rounded, size: 18),
-                      label: const Text('Chọn khoảng chương...'),
-                    ),
-                  ),
-                ],
-              );
-              actions = <Widget>[
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Huỷ'),
-                ),
-              ];
-            } else {
-              content = Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _rangeFrom,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'Từ chương',
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: TextField(
-                          controller: _rangeTo,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'Đến chương',
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (rangeError != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      rangeError!,
-                      style: TextStyle(
-                        color: Theme.of(dialogContext).colorScheme.error,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ],
-              );
-              actions = <Widget>[
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Huỷ'),
-                ),
-                FilledButton(
-                  onPressed: () {
-                    final int? from = int.tryParse(_rangeFrom!.text.trim());
-                    final int? to = int.tryParse(_rangeTo!.text.trim());
-                    if (from == null ||
-                        to == null ||
-                        from < 1 ||
-                        to > total ||
-                        from > to) {
-                      setDialogState(
-                        () => rangeError =
-                            'Nhập khoảng hợp lệ: 1 ≤ từ ≤ đến ≤ $total.',
-                      );
-                      return;
-                    }
-                    Navigator.of(dialogContext).pop();
-                    _startDownload(from: from, to: to);
-                  },
-                  child: const Text('Tải'),
-                ),
-              ];
-            }
-
-            return AlertDialog(
-              title: const Text('Tải offline'),
-              content: content,
-              actions: actions,
-            );
-          },
-        );
-      },
+    await showDownloadRangeDialog(
+      context,
+      total: total,
+      from: _rangeFrom!,
+      to: _rangeTo!,
+      onDownload: (int from, int? to) => _startDownload(from: from, to: to),
     );
   }
 
   /// Dialog khi truyện đã tải: tải lại / xoá bản tải.
   Future<void> _showDownloadedMenu() async {
-    await showDialog<void>(
-      context: context,
-      builder: (BuildContext dialogContext) => AlertDialog(
-        title: Text('Đã tải $_downloadedCount chương'),
-        content: const Text(
-          'Bạn có thể tải lại để lấy bản mới nhất, hoặc xoá để giải phóng bộ nhớ.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Huỷ'),
-          ),
-          OutlinedButton.icon(
-            onPressed: () {
-              Navigator.of(dialogContext).pop();
-              _removeDownloaded();
-            },
-            icon: const Icon(Icons.delete_outline_rounded, size: 18),
-            label: const Text('Xoá bản tải'),
-          ),
-          FilledButton.icon(
-            onPressed: () {
-              Navigator.of(dialogContext).pop();
-              _startDownload();
-            },
-            icon: const Icon(Icons.refresh_rounded, size: 18),
-            label: const Text('Tải lại'),
-          ),
-        ],
-      ),
+    await showDownloadedMenuDialog(
+      context,
+      downloadedCount: _downloadedCount,
+      onRemove: _removeDownloaded,
+      onDownload: _startDownload,
     );
   }
 
@@ -450,7 +311,7 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
     final Future<void> dialog = showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (BuildContext dialogContext) => _DownloadProgressDialog(
+      builder: (BuildContext dialogContext) => DownloadProgressDialog(
         progress: progress,
         status: status,
         onCancel: () {
@@ -502,12 +363,6 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
     } catch (_) {
       _showMessage('Không xoá được bản tải. Vui lòng thử lại.');
     }
-  }
-
-  String _dateLabel(DateTime time) {
-    final String dd = time.day.toString().padLeft(2, '0');
-    final String mm = time.month.toString().padLeft(2, '0');
-    return '$dd/$mm/${time.year}';
   }
 
   // ------------------------------------------------------------------
@@ -584,7 +439,9 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
       context: context,
       builder: (BuildContext dialogContext) => AlertDialog(
         title: const Text('Xoá bình luận?'),
-        content: const Text('Bình luận sẽ bị xoá vĩnh viễn, bạn không thể khôi phục.'),
+        content: const Text(
+          'Bình luận sẽ bị xoá vĩnh viễn, bạn không thể khôi phục.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -611,7 +468,7 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
     }
   }
 
-  /// Mở màn đăng nhập rồi tải lại danh sách (phòng khi quyền thay đổi).
+  /// Mở màn đăng nhập (tab Bình luận tự hiện ô nhập khi đăng nhập xong).
   Future<void> _openLoginForComment() async {
     await Navigator.of(
       context,
@@ -621,7 +478,6 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    final ColorScheme scheme = theme.colorScheme;
     final Story story = widget.story;
 
     return Scaffold(
@@ -642,115 +498,19 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
             const SizedBox(height: 4),
 
             // ---------- Bìa + thông tin ----------
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: 116,
-                  height: 160,
-                  child: StoryCover(story: story, radius: 14),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(story.title, style: theme.textTheme.titleLarge),
-                      const SizedBox(height: 6),
-                      Text(
-                        story.author,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: story.genres
-                            .map((String g) => GenreChip(label: g))
-                            .toList(),
-                      ),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 6,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                Icons.star_rounded,
-                                size: 16,
-                                color: AppColors.accent,
-                              ),
-                              const SizedBox(width: 2),
-                              Text(
-                                story.ratingLabel,
-                                style: theme.textTheme.labelMedium,
-                              ),
-                            ],
-                          ),
-                          Text(
-                            story.chapterLabel,
-                            style: theme.textTheme.labelMedium?.copyWith(
-                              color: scheme.onSurfaceVariant,
-                            ),
-                          ),
-                          _StatusPill(label: story.statusLabel),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+            StoryHeader(story: story),
             const SizedBox(height: 16),
 
             // ---------- Nút Đọc / Đọc tiếp + Theo dõi + Tải offline ----------
-            FilledButton.icon(
-              onPressed: _chapters.isEmpty ? null : () => _openReader(),
-              icon: const Icon(Icons.menu_book_rounded),
-              label: Text(_progress == null ? 'Đọc' : 'Đọc tiếp'),
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: _following
-                      ? FilledButton.icon(
-                          onPressed: _followBusy ? null : _onFollow,
-                          icon: const Icon(Icons.favorite_rounded, size: 18),
-                          label: const Text('Đã theo dõi'),
-                        )
-                      : OutlinedButton.icon(
-                          onPressed: _followBusy ? null : _onFollow,
-                          icon: const Icon(
-                            Icons.favorite_border_rounded,
-                            size: 18,
-                          ),
-                          label: const Text('Theo dõi'),
-                        ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _onOffline,
-                    icon: Icon(
-                      _downloaded
-                          ? Icons.download_done_rounded
-                          : Icons.download_rounded,
-                      size: 18,
-                    ),
-                    label: Text(
-                      _downloaded
-                          ? 'Đã tải ($_downloadedCount)'
-                          : 'Tải offline',
-                    ),
-                  ),
-                ),
-              ],
+            StoryActionButtons(
+              onRead: _chapters.isEmpty ? null : _openReader,
+              hasProgress: _progress != null,
+              following: _following,
+              followBusy: _followBusy,
+              onFollow: _onFollow,
+              downloaded: _downloaded,
+              downloadedCount: _downloadedCount,
+              onOffline: _onOffline,
             ),
             const SizedBox(height: 16),
 
@@ -777,13 +537,13 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
             // ---------- Tab: Chương | Bình luận ----------
             Row(
               children: [
-                _TabPill(
+                TabPill(
                   label: 'Chương',
                   selected: _tab == 0,
                   onTap: () => setState(() => _tab = 0),
                 ),
                 const SizedBox(width: 8),
-                _TabPill(
+                TabPill(
                   label: 'Bình luận',
                   selected: _tab == 1,
                   onTap: _openCommentTab,
@@ -794,392 +554,30 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
 
             // ---------- Nội dung tab ----------
             if (_tab == 1)
-              ..._commentSection(theme)
+              CommentSection(
+                controller: _commentInput,
+                comments: _comments,
+                loading: _loadingComments,
+                error: _commentsError,
+                sending: _sendingComment,
+                onSend: _sendComment,
+                onDelete: _deleteComment,
+                onLogin: _openLoginForComment,
+                onRetry: _loadComments,
+              )
             else
-              ..._chapterSection(theme),
+              ChapterListSection(
+                loading: _loadingChapters,
+                error: _chapterError,
+                chapters: _chapters,
+                hasMore: _hasMore,
+                loadingMore: _loadingMore,
+                onRetry: _loadChapters,
+                onLoadMore: _loadMore,
+                onSelect: (int index) => _openReader(index: index),
+              ),
           ],
         ),
-      ),
-    );
-  }
-
-  /// Danh sách chương + phân trang.
-  List<Widget> _chapterSection(ThemeData theme) {
-    final ColorScheme scheme = theme.colorScheme;
-
-    if (_loadingChapters) {
-      return <Widget>[
-        const SkeletonBox(width: double.infinity, height: 56, radius: 12),
-        const SizedBox(height: 8),
-        const SkeletonBox(width: double.infinity, height: 56, radius: 12),
-        const SizedBox(height: 8),
-        const SkeletonBox(width: double.infinity, height: 56, radius: 12),
-      ];
-    }
-
-    if (_chapterError != null) {
-      return <Widget>[
-        ErrorState(
-          message: _chapterError is ApiException
-              ? (_chapterError as ApiException).message
-              : 'Không tải được danh sách chương.',
-          onRetry: _loadChapters,
-        ),
-      ];
-    }
-
-    if (_chapters.isEmpty) {
-      return <Widget>[
-        const EmptyState(
-          icon: Icons.menu_book_outlined,
-          title: 'Chưa có chương nào',
-          message: 'Truyện này chưa đăng chương.',
-        ),
-      ];
-    }
-
-    return <Widget>[
-      for (final ChapterSummary chapter in _chapters)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Card(
-            child: ListTile(
-              onTap: () => _openReader(index: chapter.index),
-              leading: Text(
-                '${chapter.index}',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: scheme.primary,
-                ),
-              ),
-              title: Text(
-                chapter.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodyMedium,
-              ),
-              subtitle: Text(
-                _dateLabel(chapter.updatedAt),
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-              trailing: const Icon(Icons.chevron_right_rounded, size: 20),
-            ),
-          ),
-        ),
-      if (_hasMore)
-        Center(
-          child: _loadingMore
-              ? const Padding(
-                  padding: EdgeInsets.all(12),
-                  child: CircularProgressIndicator(),
-                )
-              : TextButton.icon(
-                  onPressed: _loadMore,
-                  icon: const Icon(Icons.expand_more_rounded),
-                  label: const Text('Xem thêm chương'),
-                ),
-        ),
-    ];
-  }
-
-  /// Tab Bình luận: ô nhập (chỉ khi đã đăng nhập) + danh sách bình luận (A3.6).
-  List<Widget> _commentSection(ThemeData theme) {
-    final ColorScheme scheme = theme.colorScheme;
-
-    // ---------------- Ô nhập / lời mời đăng nhập ----------------
-    // AnimatedBuilder để ô nhập hiện ra ngay khi đăng nhập xong.
-    final Widget inputBox = AnimatedBuilder(
-      animation: AuthService.instance,
-      builder: (BuildContext context, _) {
-        if (!AuthService.instance.isLoggedIn) {
-          return Card(
-            child: ListTile(
-              leading: const Icon(Icons.chat_bubble_outline_rounded),
-              title: Text(
-                'Đăng nhập để bình luận',
-                style: theme.textTheme.titleSmall,
-              ),
-              subtitle: const Text('Chia sẻ cảm nhận của bạn về truyện.'),
-              trailing: FilledButton(
-                onPressed: _openLoginForComment,
-                child: const Text('Đăng nhập'),
-              ),
-            ),
-          );
-        }
-        return Card(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _commentInput,
-                    minLines: 1,
-                    maxLines: 4,
-                    maxLength: 2000,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _sendComment(),
-                    decoration: const InputDecoration(
-                      hintText: 'Viết bình luận...',
-                      counterText: '',
-                      border: InputBorder.none,
-                      filled: false,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                _sendingComment
-                    ? const SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(strokeWidth: 2.4),
-                      )
-                    : IconButton.filled(
-                        onPressed: _sendComment,
-                        icon: const Icon(Icons.send_rounded, size: 20),
-                        tooltip: 'Gửi bình luận',
-                      ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-
-    // ---------------- Trạng thái đang tải ----------------
-    if (_loadingComments && _comments.isEmpty && _commentsError == null) {
-      return <Widget>[
-        inputBox,
-        const SizedBox(height: 12),
-        const SkeletonBox(width: double.infinity, height: 72, radius: 12),
-        const SizedBox(height: 8),
-        const SkeletonBox(width: double.infinity, height: 72, radius: 12),
-      ];
-    }
-
-    // ---------------- Trạng thái lỗi ----------------
-    if (_commentsError != null) {
-      return <Widget>[
-        inputBox,
-        const SizedBox(height: 12),
-        ErrorState(
-          message: _commentsError is ApiException
-              ? (_commentsError as ApiException).message
-              : 'Không tải được bình luận.',
-          onRetry: _loadComments,
-        ),
-      ];
-    }
-
-    // ---------------- Rỗng ----------------
-    if (_comments.isEmpty) {
-      return <Widget>[
-        inputBox,
-        const SizedBox(height: 12),
-        const EmptyState(
-          icon: Icons.chat_bubble_outline_rounded,
-          title: 'Chưa có bình luận nào',
-          message: 'Hãy là người đầu tiên chia sẻ cảm nhận về truyện này.',
-        ),
-      ];
-    }
-
-    // ---------------- Danh sách ----------------
-    final int? myId = AuthService.instance.user?.id;
-    return <Widget>[
-      inputBox,
-      const SizedBox(height: 12),
-      Text(
-        '${_comments.length} bình luận',
-        style: theme.textTheme.titleMedium,
-      ),
-      const SizedBox(height: 8),
-      for (final Comment comment in _comments)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Card(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Avatar chữ ký tự đầu tên (giống fallback ảnh bìa)
-                  CircleAvatar(
-                    radius: 16,
-                    backgroundColor: scheme.primary,
-                    child: Text(
-                      comment.initial,
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        color: AppColors.white,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                comment.userName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: theme.textTheme.titleSmall,
-                              ),
-                            ),
-                            Text(
-                              _dateLabel(comment.createdAt),
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: scheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Text(comment.content, style: theme.textTheme.bodyMedium),
-                      ],
-                    ),
-                  ),
-                  // Chỉ hiện nút xoá khi là bình luận của mình (A3.6)
-                  if (myId != null && comment.userId == myId)
-                    IconButton(
-                      onPressed: () => _deleteComment(comment),
-                      icon: const Icon(Icons.delete_outline_rounded, size: 20),
-                      tooltip: 'Xoá bình luận',
-                      visualDensity: VisualDensity.compact,
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ),
-    ];
-  }
-}
-
-/// Viên trạng thái "Đang ra" / "Hoàn thành" ở đầu trang chi tiết.
-class _StatusPill extends StatelessWidget {
-  const _StatusPill({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final ColorScheme scheme = theme.colorScheme;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: scheme.primary.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(AppRadius.round),
-      ),
-      child: Text(
-        label,
-        style: theme.textTheme.labelSmall?.copyWith(
-          color: scheme.primary,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-}
-
-/// Tab pill cùng phong cách với thanh điều hướng.
-class _TabPill extends StatelessWidget {
-  const _TabPill({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final ColorScheme scheme = theme.colorScheme;
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(AppRadius.pill),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: selected ? scheme.primary : scheme.surface,
-            borderRadius: BorderRadius.circular(AppRadius.pill),
-            border: Border.all(
-              color: selected ? scheme.primary : scheme.outline,
-            ),
-          ),
-          child: Text(
-            label,
-            style: theme.textTheme.labelLarge?.copyWith(
-              color: selected ? AppColors.white : scheme.onSurface,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Dialog tiến trình tải offline: thanh phần trăm + nhãn + nút Huỷ (A3.8).
-///
-/// Chỉ `_startDownload` đóng dialog này; phím Back của máy gọi [onCancel]
-/// (không được dismiss lung tung khi đang tải dở).
-class _DownloadProgressDialog extends StatelessWidget {
-  const _DownloadProgressDialog({
-    required this.progress,
-    required this.status,
-    required this.onCancel,
-  });
-
-  /// Tiến độ 0.0–1.0.
-  final ValueListenable<double> progress;
-
-  /// Nhãn hiện tại, ví dụ `Đang tải 3/128 chương...`.
-  final ValueListenable<String> status;
-
-  final VoidCallback onCancel;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (bool didPop, Object? result) {
-        if (!didPop) onCancel();
-      },
-      child: AlertDialog(
-        title: const Text('Đang tải offline'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ValueListenableBuilder<String>(
-              valueListenable: status,
-              builder: (BuildContext context, String value, _) =>
-                  Text(value, style: theme.textTheme.bodyMedium),
-            ),
-            const SizedBox(height: 14),
-            ValueListenableBuilder<double>(
-              valueListenable: progress,
-              builder: (BuildContext context, double value, _) =>
-                  LinearProgressIndicator(value: value),
-            ),
-          ],
-        ),
-        actions: [TextButton(onPressed: onCancel, child: const Text('Huỷ'))],
       ),
     );
   }

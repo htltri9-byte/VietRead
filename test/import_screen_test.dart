@@ -78,62 +78,60 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Bắt đầu nhập'));
     await tester.pumpAndSettle();
-    expect(
-      find.text('Link không hợp lệ — cần http(s) đầy đủ'),
-      findsOneWidget,
-    );
+    expect(find.text('Link không hợp lệ — cần http(s) đầy đủ'), findsOneWidget);
     // Vẫn ở form, chưa chuyển sang màn theo dõi trạng thái
     expect(find.byType(LinearProgressIndicator), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('nhập nguồn hợp lệ → poll tới Done → về Truyện của tôi thấy nháp', (
-    WidgetTester tester,
-  ) async {
-    final MockApiService mock = api();
-    final AuthService auth = AuthService.resetForTest(api: mock);
-    await auth.login('tacgia@vietread.vn', 'VietRead@123');
+  testWidgets(
+    'nhập nguồn hợp lệ → poll tới Done → về Truyện của tôi thấy nháp',
+    (WidgetTester tester) async {
+      final MockApiService mock = api();
+      final AuthService auth = AuthService.resetForTest(api: mock);
+      await auth.login('tacgia@vietread.vn', 'VietRead@123');
 
-    // Vào từ tab Đăng truyện (icon AppBar).
-    tester.view.physicalSize = const Size(420, 900);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: AppTheme.light(),
-        home: UploadScreen(api: mock),
-      ),
-    );
-    await tester.pumpAndSettle();
+      // Vào từ tab Đăng truyện (icon AppBar).
+      tester.view.physicalSize = const Size(420, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: UploadScreen(api: mock),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Nhập truyện từ link'));
-    await tester.pumpAndSettle();
-    expect(find.byType(ImportScreen), findsOneWidget);
+      await tester.tap(find.byTooltip('Nhập truyện từ link'));
+      await tester.pumpAndSettle();
+      expect(find.byType(ImportScreen), findsOneWidget);
 
-    await tester.enterText(
-      find.byType(TextField),
-      'https://m.qidian.com/book/123/',
-    );
-    await tester.tap(find.widgetWithText(FilledButton, 'Bắt đầu nhập'));
-    await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byType(TextField),
+        'https://m.qidian.com/book/123/',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Bắt đầu nhập'));
+      await tester.pumpAndSettle();
 
-    // Job bắt đầu chạy: Pending → Running + %
-    expect(find.text('Đang chạy'), findsOneWidget);
-    expect(find.byType(LinearProgressIndicator), findsOneWidget);
+      // Job bắt đầu chạy: Pending → Running + %
+      expect(find.text('Đang chạy'), findsOneWidget);
+      expect(find.byType(LinearProgressIndicator), findsOneWidget);
 
-    await pumpPolls(tester);
-    expect(find.text('Hoàn tất'), findsOneWidget);
-    expect(find.text('100%'), findsOneWidget);
+      await pumpPolls(tester);
+      expect(find.text('Hoàn tất'), findsOneWidget);
+      expect(find.text('100%'), findsOneWidget);
 
-    await tester.tap(find.widgetWithText(FilledButton, 'Về Truyện của tôi'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Về Truyện của tôi'));
+      await tester.pumpAndSettle();
 
-    // Truyện nhập hiện trong "Truyện của tôi" dạng nháp.
-    expect(find.byType(ImportScreen), findsNothing);
-    expect(find.text('Đường Qingyun'), findsOneWidget);
-    expect(find.text('Nháp'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
+      // Truyện nhập hiện trong "Truyện của tôi" dạng nháp.
+      expect(find.byType(ImportScreen), findsNothing);
+      expect(find.text('Đường Qingyun'), findsOneWidget);
+      expect(find.text('Nháp'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('nguồn không hỗ trợ → Failed kèm thông báo lỗi + nút Thử lại', (
     WidgetTester tester,
@@ -143,7 +141,10 @@ void main() {
     await auth.login('tacgia@vietread.vn', 'VietRead@123');
     await pumpImport(tester, mock);
 
-    await tester.enterText(find.byType(TextField), 'https://example.com/book/1');
+    await tester.enterText(
+      find.byType(TextField),
+      'https://example.com/book/1',
+    );
     await tester.tap(find.widgetWithText(FilledButton, 'Bắt đầu nhập'));
     await tester.pumpAndSettle();
 
@@ -164,7 +165,10 @@ void main() {
     await auth.login('tacgia@vietread.vn', 'VietRead@123');
     await pumpImport(tester, mock);
 
-    await tester.enterText(find.byType(TextField), 'https://example.com/book/1');
+    await tester.enterText(
+      find.byType(TextField),
+      'https://example.com/book/1',
+    );
     await tester.tap(find.widgetWithText(FilledButton, 'Bắt đầu nhập'));
     await tester.pumpAndSettle();
     await pumpPolls(tester);
@@ -176,7 +180,10 @@ void main() {
     expect(find.text('Bắt đầu nhập'), findsOneWidget);
     expect(find.text('Thất bại'), findsNothing);
     // Link cũ vẫn còn để người dùng sửa
-    expect(find.widgetWithText(TextField, 'https://example.com/book/1'), findsOneWidget);
+    expect(
+      find.widgetWithText(TextField, 'https://example.com/book/1'),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 }

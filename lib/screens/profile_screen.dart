@@ -217,8 +217,7 @@ class _LoggedInBody extends StatelessWidget {
                 title: const Text('Truyện của tôi'),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 // Có callback (Bước 9) → mở tab Đăng truyện; không thì báo chưa làm.
-                onTap: onOpenMyStories ??
-                    () => onComingSoon('Truyện của tôi'),
+                onTap: onOpenMyStories ?? () => onComingSoon('Truyện của tôi'),
               ),
               const Divider(height: 1),
               ListTile(

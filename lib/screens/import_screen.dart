@@ -10,7 +10,7 @@ import 'auth_screen.dart';
 
 /// Màn **Nhập truyện từ link** — A3.10 (Bước 10).
 ///
-/// - Dán link nguồn (Qidian, B.faloo, Fanqie… hoặc nguồn demo) → chọn ngôn
+/// - Dán link nguồn (Qidian hoặc nguồn demo) → chọn ngôn
 ///   ngữ đích → `POST /imports` tạo job rồi poll `GET /imports/{jobId}`
 ///   mỗi 1.5 giây cho tới khi `Done` / `Failed` ( Pending / Running / % chương ).
 /// - Việc cào + dịch chạy ở **backend** nên quay về màn khác job vẫn tiếp tục.
@@ -160,8 +160,7 @@ class _ImportScreenState extends State<ImportScreen> {
             const EmptyState(
               icon: Icons.link_rounded,
               title: 'Đăng nhập để nhập truyện',
-              message:
-                  'Dán link truyện nước ngoài, VietRead tự cào và dịch sang tiếng Việt.',
+              message: 'Dán link truyện nước ngoài, VietRead tự cào và dịch sang tiếng Việt.',
             ),
             const SizedBox(height: 8),
             FilledButton.icon(
@@ -233,9 +232,8 @@ class _ImportScreenState extends State<ImportScreen> {
         Text(
           'Việc cào và dịch chạy ở máy chủ; truyện nhập về dạng nháp để bạn '
           'chỉnh sửa trước khi đăng. Nguồn demo: demo.vietread.local/book/1',
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
         ),
       ],
     );
@@ -325,7 +323,8 @@ class _ImportScreenState extends State<ImportScreen> {
                   minHeight: 6,
                   borderRadius: BorderRadius.circular(4),
                 ),
-                if (status == 'Failed' && (job?.error?.isNotEmpty ?? false)) ...<Widget>[
+                if (status == 'Failed' &&
+                    (job?.error?.isNotEmpty ?? false)) ...<Widget>[
                   const SizedBox(height: 12),
                   Text(
                     job!.error!,
@@ -385,10 +384,7 @@ class _ImportScreenState extends State<ImportScreen> {
             label: const Text('Thử lại'),
           ),
         if (status == 'Pending' || status == 'Running')
-          TextButton(
-            onPressed: _reset,
-            child: const Text('Nhập truyện khác'),
-          ),
+          TextButton(onPressed: _reset, child: const Text('Nhập truyện khác')),
       ],
     );
   }

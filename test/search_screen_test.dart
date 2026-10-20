@@ -136,9 +136,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('lọc trạng thái + sắp xếp qua menu', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('lọc trạng thái + sắp xếp qua menu', (WidgetTester tester) async {
     await pumpSearch(tester);
 
     // Trạng thái: Hoàn thành → chỉ truyện completed
@@ -151,7 +149,9 @@ void main() {
     expect(find.text('Kiếm Sư Vọng Tường'), findsNothing); // đang ra → bị loại
 
     // Bỏ lọc trạng thái → hiện lại 8 truyện
-    await tester.tap(find.text('Hoàn thành').first); // label + giá trị trong nút
+    await tester.tap(
+      find.text('Hoàn thành').first,
+    ); // label + giá trị trong nút
     await tester.pumpAndSettle();
     await tester.tap(find.text('Tất cả trạng thái'));
     await tester.pumpAndSettle();

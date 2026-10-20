@@ -49,3 +49,6 @@ app.*.map.json
 
 # Backend VietRead — file cấu hình cục bộ, không commit
 backend/.env
+
+# Cache pickle tự sinh của từ điển (vietphrase.py tạo lại khi thiếu)
+backend/dictionaries/_cache.pkl

@@ -207,46 +207,48 @@ void main() {
       expect(sp.getString(AuthService.userKey), isNull);
     });
 
-    test('401 từ /auth/login (sai mật khẩu) KHÔNG đăng xuất phiên đang có',
-        () async {
-      bool badPassword = false;
-      final MockClient client = MockClient((http.Request request) async {
-        if (request.url.path.endsWith('/auth/login')) {
-          return badPassword
-              ? jsonResponse(
-                  '{"message":"Email hoặc mật khẩu không đúng"}',
-                  401,
-                )
-              : jsonResponse(loginOk, 200);
-        }
-        return jsonResponse('{}', 200);
-      });
-      final HttpApiService api = HttpApiService(
-        client: client,
-        baseUrl: 'http://localhost:8000',
-      );
-      final AuthService auth = AuthService.resetForTest(api: api);
+    test(
+      '401 từ /auth/login (sai mật khẩu) KHÔNG đăng xuất phiên đang có',
+      () async {
+        bool badPassword = false;
+        final MockClient client = MockClient((http.Request request) async {
+          if (request.url.path.endsWith('/auth/login')) {
+            return badPassword
+                ? jsonResponse(
+                    '{"message":"Email hoặc mật khẩu không đúng"}',
+                    401,
+                  )
+                : jsonResponse(loginOk, 200);
+          }
+          return jsonResponse('{}', 200);
+        });
+        final HttpApiService api = HttpApiService(
+          client: client,
+          baseUrl: 'http://localhost:8000',
+        );
+        final AuthService auth = AuthService.resetForTest(api: api);
 
-      await auth.login('docgia@vietread.vn', 'VietRead@123');
-      expect(auth.isLoggedIn, isTrue);
+        await auth.login('docgia@vietread.vn', 'VietRead@123');
+        expect(auth.isLoggedIn, isTrue);
 
-      badPassword = true;
-      await expectLater(
-        api.login('docgia@vietread.vn', 'sai-mat-khau'),
-        throwsA(
-          isA<ApiException>().having(
-            (ApiException e) => e.message,
-            'message',
-            'Email hoặc mật khẩu không đúng',
+        badPassword = true;
+        await expectLater(
+          api.login('docgia@vietread.vn', 'sai-mat-khau'),
+          throwsA(
+            isA<ApiException>().having(
+              (ApiException e) => e.message,
+              'message',
+              'Email hoặc mật khẩu không đúng',
+            ),
           ),
-        ),
-      );
-      await pumpEventQueue();
-      // Sai mật khẩu là lỗi nhập liệu, không phải phiên hết hạn.
-      expect(auth.isLoggedIn, isTrue);
-      final SharedPreferences sp = await SharedPreferences.getInstance();
-      expect(sp.getString(AuthService.tokenKey), isNotEmpty);
-    });
+        );
+        await pumpEventQueue();
+        // Sai mật khẩu là lỗi nhập liệu, không phải phiên hết hạn.
+        expect(auth.isLoggedIn, isTrue);
+        final SharedPreferences sp = await SharedPreferences.getInstance();
+        expect(sp.getString(AuthService.tokenKey), isNotEmpty);
+      },
+    );
   });
 }
 

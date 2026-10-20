@@ -1,25 +1,38 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../models/chapter.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 
-/// Mở bottom sheet **Thêm chương** — trả `true` khi thêm thành công
+/// Kết quả cộng dồn của sheet: đếm số chương đã thêm để biết có cần nạp lại
+/// danh sách khi người dùng đóng sheet (kể cả khi họ tự đóng sau khi đã tự lưu).
+class ImportOutcome {
+  int added = 0;
+}
+
+/// Mở bottom sheet **Thêm chương** — trả `true` khi thêm ít nhất 1 chương
 /// (caller nạp lại danh sách chương + báo SnackBar).
 Future<bool?> showChapterImportSheet(
   BuildContext context, {
   required ApiService api,
   required int storyId,
-}) {
-  return showModalBottomSheet<bool>(
+}) async {
+  final ImportOutcome outcome = ImportOutcome();
+  final bool? added = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
     builder: (BuildContext ctx) => Padding(
       // Không để bàn phím che form khi đang gõ.
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
-      child: ChapterImportSheet(api: api, storyId: storyId),
+      child: ChapterImportSheet(api: api, storyId: storyId, outcome: outcome),
     ),
   );
+  // Người dùng kéo xuống đóng sheet sau khi đã tự lưu chương → vẫn coi là
+  // "có chương mới" để màn Quản lý chương nạp lại.
+  return added == true || outcome.added > 0;
 }
 
 /// Bottom sheet thêm chương vào truyện đã có — A3.11:
@@ -29,15 +42,27 @@ Future<bool?> showChapterImportSheet(
 /// - Tab **Dán văn bản**: nội dung + ngôn ngữ nguồn (Trung/Việt) →
 ///   `POST /stories/{id}/chapters/import-text`.
 ///
+/// **Tự lưu khi dán**: dán một lần ≥ 120 ký tự (một chương) là tự gọi import
+/// sau ~1 giây, không cần bấm nút cho từng chương — ô tự xoá để dán chương
+/// tiếp theo, sheet mở sẵn chờ dán. Vẫn bấm **Thêm** được bình thường.
+///
 /// Validate link ngay trên ô; lỗi backend hiện đúng message kèm nút
 /// **Thử lại**; đang xử lý thì vô hiệu hoá nút (không bấm trùng).
 class ChapterImportSheet extends StatefulWidget {
-  const ChapterImportSheet({super.key, required this.api, required this.storyId});
+  const ChapterImportSheet({
+    super.key,
+    required this.api,
+    required this.storyId,
+    this.outcome,
+  });
 
   /// Tiêm nguồn dữ liệu (test dùng mock, app thật dùng HTTP).
   final ApiService api;
 
   final int storyId;
+
+  /// Cộng dồn số chương đã thêm (dùng cho [showChapterImportSheet]).
+  final ImportOutcome? outcome;
 
   @override
   State<ChapterImportSheet> createState() => _ChapterImportSheetState();
@@ -63,6 +88,25 @@ class _ChapterImportSheetState extends State<ChapterImportSheet> {
   /// Người dùng bấm chọn tay ngôn ngữ → không auto-đổi nữa (không "đánh lừa").
   bool _langPinned = false;
 
+  // --- Tự lưu khi dán (không phải bấm nút cho từng chương) ---
+
+  /// Ngưỡng coi là "dán một chương": một lần đổi thêm chừng này ký tự.
+  static const int _pasteChars = 120;
+
+  /// Chờ người dùng dán dứt điểm rồi mới tự lưu (dán 2-3 đoạn vẫn gộp).
+  static const Duration _autoSaveDelay = Duration(milliseconds: 1200);
+
+  Timer? _autoSaveTimer;
+
+  /// Nội dung ô ở lần đổi trước — dùng tính delta để nhận ra thao tác dán.
+  String _previousText = '';
+
+  /// Số chương đã thêm trong phiên sheet này (chỉ lưu khi chưa đóng sheet).
+  int _savedCount = 0;
+
+  /// Thông báo nhỏ dưới ô: đang đếm ngược tự lưu / đã lưu chương mấy.
+  String? _autoStatus;
+
   /// Chữ Trung (CJK Unified + Extension A + Compatibility) — dán trúng thì tự
   /// chọn "Trung" để backend dịch sang tiếng Việt.
   static final RegExp _cjkPattern = RegExp(
@@ -81,6 +125,7 @@ class _ChapterImportSheetState extends State<ChapterImportSheet> {
 
   @override
   void dispose() {
+    _autoSaveTimer?.cancel();
     _url.dispose();
     _chapterNo.dispose();
     _text.dispose();
@@ -91,7 +136,45 @@ class _ChapterImportSheetState extends State<ChapterImportSheet> {
       ? error.message
       : 'Không thêm được chương. Vui lòng thử lại.';
 
-  Future<void> _submit() async {
+  /// Đổi nội dung ô dán: dán một lần ≥ [_pasteChars] ký tự → đếm ngược rồi
+  /// **tự lưu** (không cần bấm nút cho từng chương). Gõ tay từng chữ không
+  /// chạm ngưỡng nên không bị tự lưu giữa chừng.
+  void _onPastedTextChanged(String value) {
+    final int delta = value.length - _previousText.length;
+    _previousText = value;
+    if (_textError != null) setState(() => _textError = null);
+    _syncLangFromText(); // dán tiếng Trung → tự chọn "Trung"
+
+    _autoSaveTimer?.cancel();
+    if (_busy || delta < _pasteChars) return;
+    if (value.trim().isEmpty || value.length > 100000) return;
+    setState(
+      () => _autoStatus = 'Sẽ tự lưu sau 1 giây — vẫn dán tiếp được ngay…',
+    );
+    _autoSaveTimer = Timer(_autoSaveDelay, () {
+      if (!mounted) return;
+      _submit(auto: true);
+    });
+  }
+
+  /// Đã tự lưu hết nội dung trong ô → nút chuyển sang "Xong" để đóng sheet.
+  bool get _doneMode =>
+      _mode == _modeText && _savedCount > 0 && _text.text.trim().isEmpty;
+
+  /// Sau khi tự lưu: xoá ô để dán chương tiếp theo, báo đã lưu chương mấy.
+  void _afterAutoSaved(Chapter chapter) {
+    _previousText = '';
+    _text.clear();
+    _langPinned = false;
+    setState(() {
+      _busy = false;
+      _savedCount += 1;
+      _autoStatus =
+          'Đã lưu chương ${chapter.index} — dán tiếp chương sau vào ô trên.';
+    });
+  }
+
+  Future<void> _submit({bool auto = false}) async {
     if (_busy) return;
 
     if (_mode == _modeLink) {
@@ -126,6 +209,7 @@ class _ChapterImportSheetState extends State<ChapterImportSheet> {
         _urlError = null;
         _chapterNoError = null;
         _submitError = null;
+        _autoStatus = null;
       });
       try {
         widget.api.setToken(AuthService.instance.session?.token);
@@ -134,12 +218,14 @@ class _ChapterImportSheetState extends State<ChapterImportSheet> {
           chapterUrl: url,
           chapterNo: chapterNo,
         );
+        widget.outcome?.added += 1;
         if (mounted) Navigator.of(context).pop(true);
       } catch (error) {
         if (!mounted) return;
         setState(() {
           _busy = false;
           _submitError = _messageOf(error);
+          _autoStatus = null;
         });
       }
       return;
@@ -159,20 +245,29 @@ class _ChapterImportSheetState extends State<ChapterImportSheet> {
       _busy = true;
       _textError = null;
       _submitError = null;
+      _autoStatus = null;
     });
     try {
       widget.api.setToken(AuthService.instance.session?.token);
-      await widget.api.importChapterFromText(
+      final Chapter chapter = await widget.api.importChapterFromText(
         widget.storyId,
         text: text,
         sourceLang: _sourceLang,
       );
-      if (mounted) Navigator.of(context).pop(true);
+      widget.outcome?.added += 1;
+      if (!mounted) return;
+      if (auto) {
+        // Tự lưu: giữ sheet mở để dán tiếp chương sau (không cần bấm nút).
+        _afterAutoSaved(chapter);
+      } else {
+        Navigator.of(context).pop(true);
+      }
     } catch (error) {
       if (!mounted) return;
       setState(() {
         _busy = false;
         _submitError = _messageOf(error);
+        _autoStatus = null;
       });
     }
   }
@@ -229,9 +324,9 @@ class _ChapterImportSheetState extends State<ChapterImportSheet> {
             onSelectionChanged: _busy
                 ? null
                 : (Set<String> selection) => setState(() {
-                      _mode = selection.first;
-                      _submitError = null;
-                    }),
+                    _mode = selection.first;
+                    _submitError = null;
+                  }),
           ),
           const SizedBox(height: 16),
 
@@ -277,10 +372,7 @@ class _ChapterImportSheetState extends State<ChapterImportSheet> {
                 hintText: 'Dán nội dung chương vào đây...',
                 errorText: _textError,
               ),
-              onChanged: (_) {
-                if (_textError != null) setState(() => _textError = null);
-                _syncLangFromText(); // dán tiếng Trung → tự chọn "Trung"
-              },
+              onChanged: _onPastedTextChanged,
             ),
             const SizedBox(height: 12),
             SegmentedButton<String>(
@@ -293,9 +385,9 @@ class _ChapterImportSheetState extends State<ChapterImportSheet> {
               onSelectionChanged: _busy
                   ? null
                   : (Set<String> selection) => setState(() {
-                        _sourceLang = selection.first;
-                        _langPinned = true; // chọn tay → giữ nguyên
-                      }),
+                      _sourceLang = selection.first;
+                      _langPinned = true; // chọn tay → giữ nguyên
+                    }),
             ),
             const SizedBox(height: 4),
             Text(
@@ -313,6 +405,17 @@ class _ChapterImportSheetState extends State<ChapterImportSheet> {
                 color: scheme.onSurfaceVariant,
               ),
             ),
+            if (_autoStatus != null) ...<Widget>[
+              const SizedBox(height: 4),
+              Text(
+                _autoStatus!,
+                key: const Key('autoSaveStatus'),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: scheme.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
           ],
 
           // ---- Lỗi backend → hiện đúng message + nút Thử lại ----
@@ -338,16 +441,27 @@ class _ChapterImportSheetState extends State<ChapterImportSheet> {
           ],
 
           const SizedBox(height: 8),
+          // Đã tự lưu hết nội dung trong ô → nút "Xong" đóng sheet (nạp lại list).
           FilledButton.icon(
-            onPressed: _busy ? null : _submit,
+            onPressed: _busy
+                ? null
+                : () {
+                    if (_doneMode) {
+                      Navigator.of(context).pop(true);
+                    } else {
+                      _submit();
+                    }
+                  },
             icon: _busy
                 ? const SizedBox(
                     width: 18,
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
+                : _doneMode
+                ? const Icon(Icons.check_rounded, size: 18)
                 : const Icon(Icons.add_rounded, size: 18),
-            label: const Text('Thêm'),
+            label: Text(_doneMode ? 'Xong' : 'Thêm'),
           ),
         ],
       ),

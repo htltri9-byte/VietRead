@@ -396,7 +396,7 @@ Tay trên emulator (`flutter run`, backend đang chạy; `API_BASE_URL` mặc đ
   Done. Bất kỳ lỗi nào (nguồn chặn, link sai, dịch lỗi) → Failed kèm `Error` tiếng
   Việt; truyện nhập dở vẫn giữ lại để chỉnh sửa.
 - [`backend/app/services/scraper.py`](backend/app/services/scraper.py): interface
-  `parse_story(url)` / `parse_chapter(url)`; adapter **Qidian / B.faloo / Fanqie**
+  `parse_story(url)` / `parse_chapter(url)`; adapter **Qidian**
   (retry + delay giữa các request, `IMPORT_CHAPTER_DELAY` / `IMPORT_MAX_CHAPTERS`
   trong `.env`) + nguồn demo **`demo.vietread.local`** dùng fixture có sẵn
   (không cào mạng) để demo/kiểm thử cả luồng.
@@ -430,13 +430,11 @@ Tay trên emulator (`flutter run`, backend đang chạy; `API_BASE_URL` mặc đ
 - `ApiService` thêm `startImport` / `fetchImportJob` (cả Http lẫn Mock; mock có
   `resetImportsForTest()` và mô phỏng worker chạy nền theo từng lần poll).
 
-### Trạng thái 3 nguồn thật (kiểm tra live trên máy này)
+### Trạng thái nguồn thật (kiểm tra live trên máy này)
 
 | Nguồn | Trạng thái | Ghi chú |
 |---|---|---|
 | Qidian (`www.` / `m.qidian.com`) | ✅ đọc được | link `www.` bị anti-bot (HTTP 202) → adapter tự rewrite về `m.qidian.com` + lấy catalog (840 chương, sắp theo 第N章); chương miễn phí dịch OK; chương **VIP** → Failed rõ "nội dung trả phí" |
-| Fanqie (`fanqienovel.com`) | ⚠️ danh mục OK, nội dung bị chặn | chữ trong trang chương bị thay bằng ký tự PUA + render bằng font web mã hoá → adapter đọc `chapterData.content` rồi báo rõ "Fanqie mã hoá nội dung… chưa giải mã được" (giải mã thật cần OCR font — ngoài phạm vi đồ án) |
-| Faloo (`wap.faloo.com`) | ⚠️ danh mục OK, nội dung bị chặn | trang chương yêu cầu đăng nhập tài khoản (thẻ `noLogin`) → adapter báo rõ "Faloo yêu cầu đăng nhập…" |
 | `demo.vietread.local` | ✅ | nguồn demo fixture — đủ luồng Pending → Done không cần mạng cào |
 
 > Sách Qidian dễ có hàng trăm chương: khi demo nên đặt `IMPORT_MAX_CHAPTERS`
@@ -488,13 +486,13 @@ truyện + tốn quota dịch) — dán link chương vào truyện sẵn có:
 
 ```bash
 flutter analyze        # No issues found
-flutter test           # 116/116 pass (5 test sheet Thêm chương + 5 test mock)
+flutter test           # 147/147 pass
 
 # Backend thật (đã gồm POST/GET /imports + /chapters/import + /import-text):
 ./.venv/Scripts/python.exe -m uvicorn --app-dir backend app.main:app --host 127.0.0.1 --port 8000
-# (terminal khác — 145 kiểm tra HTTP; check import Done + thêm chương link Qidian cần mạng):
+# (terminal khác — 283 kiểm tra HTTP; check import Done + thêm chương link Qidian cần mạng):
 cd backend && PYTHONUTF8=1 ./.venv/Scripts/python.exe test_api.py
-# → TẤT CẢ 145 KIỂM TRA ĐỀU PASS
+# → TẤT CẢ 283 KIỂM TRA ĐỀU PASS
 ```
 
 Tay trên emulator (`flutter run`, backend đang chạy):
@@ -508,7 +506,7 @@ Tay trên emulator (`flutter run`, backend đang chạy):
    **Nháp** → mở **Quản lý chương** thấy 3 chương đã dịch (sửa/xoá như Bước 9).
 4. Dán `abc` → lỗi ngay trên ô; `https://example.com/book/1` → job **Thất bại**
    kèm "...chưa được hỗ trợ..." → nút **Thử lại**.
-5. Nguồn thật (Qidian/Fanqie): dán link bình thường — nếu nguồn chặn IP hoặc nội
+5. Nguồn thật (Qidian): dán link bình thường — nếu nguồn chặn IP hoặc nội
    dung trả phí thì job Failed kèm lý do rõ ràng (đúng C4).
 
 ### Hướng dẫn test tay — Thêm chương (A3.11)
@@ -557,15 +555,16 @@ Tay trên emulator (`flutter run`, backend đang chạy):
 
 ```bash
 flutter analyze        # No issues found
-flutter test           # 116/116 pass
+flutter test           # 147/147 pass
 
-# Backend — 145 kiểm tra HTTP (bật server trước):
+# Backend — 314 kiểm tra HTTP (bật server trước):
 cd backend && PYTHONUTF8=1 ./.venv/Scripts/python.exe test_api.py
-# → TẤT CẢ 145 KIỂM TRA ĐỀU PASS
+# → TẤT CẢ 314 KIỂM TRA ĐỀU PASS
 ```
 
-Kết quả mới nhất trên máy này: `flutter analyze` 0 lỗi · `flutter test` **116/116**
-· `test_api.py` **145/145** (đều exit code 0).
+Kết quả mới nhất trên máy này: `flutter analyze` 0 lỗi · `flutter test` **147/147**
+· `test_api.py` **314/314** · `test_marking.py` **80/80** · `test_alternatives.py`
+**55/55** · `test_golden_translate.py` **10/10** (đều exit code 0).
 
 ### Checklist tổng hợp — tự chạy tay 1 vòng (mỗi mục 1–2 phút)
 
@@ -587,6 +586,170 @@ Kết quả mới nhất trên máy này: `flutter analyze` 0 lỗi · `flutter 
 9. **Thêm chương**: Quản lý chương → nút icon cạnh **Chương mới** → dán link
    chương Qidian miễn phí → chương mới hiện trong danh sách; dán lại link đó →
    lỗi trùng 409 + **Thử lại**; thử link VIP / link book khác → lỗi đúng.
+
+---
+
+## 10B. Sửa bản dịch — Gợi ý nhiều nghĩa, Tìm & thay thế (A3.12)
+
+### Marker gợi ý nhiều nghĩa `{nghĩa1|nghĩa2}`
+
+Khi `convert()` của từ điển offline gặp mục nhiều nghĩa (nghĩa tách bằng
+`/` trong `vietphrase.txt`/`names.txt`), bản dịch **lưu trong DB** kèm marker
+`{nghĩa1|nghĩa2|nghĩa3}` (nghĩa đầu = mặc định, tối đa 6 nghĩa, bỏ nghĩa
+trống/trùng). Dạng cũ `{nghĩa1:nghĩa2}` vẫn đọc được.
+
+- **Người đọc KHÔNG BAO GIỜ thấy dấu `{}`**: mọi endpoint dành cho người đọc
+  (`GET /chapters/{id}`, tải offline, tìm kiếm, xem thử) trả bản đã resolve
+  (lấy nghĩa đầu).
+- **Chủ truyện** sửa chương thì GET `/chapters/{id}?raw=1` để thấy marker.
+- `POST /chapters/{id}/retranslate` (chủ truyện): dịch lại từ `OriginalContent`
+  bằng từ điển hiện tại — trả `{chapterId, content}` để nạp vào màn Sửa
+  chương, **KHÔNG tự lưu**. Dùng cho chương đã dịch trước khi có marker.
+
+### Màn Sửa chương
+
+- Ô nội dung highlight marker (nền màu chủ đề, chữ đậm); chạm marker →
+  bottom sheet chọn nghĩa (nghĩa đầu gắn nhãn "mặc định", có ô nhập nghĩa
+  khác, công tắc **Áp dụng cho mọi chỗ giống nhau trong chương**).
+- Thanh công cụ: **Còn N chỗ** (nhảy marker kế tiếp/trước), **Lấy nghĩa đầu
+  cho tất cả** (xác nhận), **Dịch lại** (cảnh báo thay nội dung đang sửa).
+- Bấm Lưu mà còn marker → hỏi: **Lưu và làm tiếp sau** (giữ marker) hoặc
+  **Lấy nghĩa đầu rồi lưu**.
+
+### Tìm & thay thế theo truyện (màn Quản lý chương → icon 🔍)
+
+`POST /stories/{id}/replace` (chỉ chủ truyện): `{find, replace, matchCase,
+wholeWord, includeTitles, applyToFuture, dryRun}` — thay trên bản dịch MỌI
+chương của truyện, không đụng `OriginalContent`/truyện khác/từ điển chung.
+
+- `dryRun=true` → đếm chỗ/chương, không ghi. Xem trước xong mới xác nhận.
+- Thay thật lưu snapshot 1 batch gần nhất (`ChapterRevisions`) →
+  `POST /stories/{id}/replace/undo` hoàn tác (chương đã sửa tiếp sau batch
+  thì bỏ qua).
+- `applyToFuture=true` → lưu vào `StoryGlossary`, tự áp cho chương thêm sau
+  (import link/văn bản, dịch lại) của CÙNG truyện.
+- Màn Quản lý quy tắc: `GET /stories/{id}/glossary`,
+  `DELETE /stories/{id}/glossary/{ruleId}`.
+
+### Từ điển cá nhân (backend — không còn trong app Flutter)
+
+`POST/GET/DELETE /dictionary/names` — thêm từ Trung → Việt (kèm tags) cho
+riêng người dùng; ghi `dictionaries/names.txt` + nạp lại ngay, dùng để dịch
+chương nhập sau này. Bảng `DictionaryWords` chỉ là sổ theo dõi.
+(Màn “Từ điển cá nhân” ở tab Tài khoản đã gỡ khỏi app — endpoint và bảng
+backend giữ nguyên, gọi qua API nếu cần.)
+
+### Bảng/migration mới (idempotent, chạy lại an toàn)
+
+```bash
+cd backend
+sqlcmd -S localhost -E -C -b -f 65001 -i database/migrate_glossary_revisions.sql
+sqlcmd -S localhost -E -C -b -f 65001 -i database/migrate_dictionary_words.sql
+```
+
+`StoryGlossary` (quy tắc A → B theo truyện), `ChapterRevisions` (snapshot
+để undo), `DictionaryWords` (từ điển cá nhân) — đều có trong `schema.sql`.
+
+### Hướng dẫn test tay (A3.12)
+
+```bash
+# Backend — 314 kiểm tra (bật server trước):
+cd backend && PYTHONUTF8=1 ./.venv/Scripts/python.exe test_api.py
+# → TẤT CẢ 314 KIỂM TRA ĐỀU PASS
+
+# Demo thật: import chương Qidian → 15 marker (mức low) → thay "không"×46 → undo
+cd backend && PYTHONUTF8=1 ./.venv/Scripts/python.exe _demo_qidian.py
+
+# Flutter:
+flutter test           # 147/147 (gồm chapter_form_screen_test + replace_screen_test)
+```
+
+App: đăng nhập `tacgia@vietread.vn` → Quản lý chương → icon 🔍 **Tìm & thay
+thế** → nhập A/B → **Xem trước** → **Thay ngay** → **Hoàn tác**. Mở một
+chương → marker hiện nền cam; chạm vào để chọn nghĩa.
+
+---
+
+## 10C. Mức gợi ý nhiều nghĩa + "Luôn dùng nghĩa này" / "Không hỏi lại" (A3.13)
+
+### 3 mức gợi ý (`markLevel`) — bộ lọc marker phía từ điển
+
+Bộ lọc `app/marking.py` quyết định một mục nhiều nghĩa có thành marker
+`{nghĩa1|nghĩa2}` hay tự lấy nghĩa đầu. Một mục chỉ bị đánh dấu khi qua đủ
+các bước: chống trùng/gộp nghĩa gần giống → bỏ trợ từ (`no_mark.txt`) →
+bỏ khóa 1 Hán (trừ `ambiguous.txt`) → bỏ tên riêng → khác nghĩa về Ý
+(`ambiguous.txt` luôn giữ, `synonyms.txt` không bao giờ đánh dấu) → chấm
+điểm + trần mỗi chương:
+
+| `markLevel` | Trần marker/chương | Bộ lọc |
+|---|---|---|
+| `low` (mặc định — `MARK_LEVEL` trong `.env`) | 15 | chỉ `ambiguous.txt` + luật `{vì:là}` viết tay |
+| `medium` | 40 | bộ lọc 1-5 + loại `synonyms.txt` |
+| `high` | không giới hạn | chỉ gộp trùng (gần như hành vi cũ) |
+
+- Client ghi đè mức qua body `{ "markLevel": "low|medium|high" }` của
+  `POST /chapters/{id}/retranslate` và các endpoint import (sai giá trị → 400).
+- 3 file danh sách nằm cạnh `vietphrase.txt` (`backend/dictionaries/`): đổi
+  file không cần restart (tự nạp khi mtime đổi) hoặc bấm
+  `POST /dictionary/mark-lists/reload`.
+- Màn **Sửa chương → Dịch lại** có SegmentedButton **Ít / Vừa / Nhiều** kèm
+  giải thích trần; app gửi `markLevel` tương ứng.
+
+### "Luôn dùng nghĩa này" / "Không hỏi lại" — theo từng truyện
+
+Chạm marker → bottom sheet có 2 nút mới:
+
+- **Luôn dùng nghĩa này** → `POST /stories/{id}/word-choices`
+  (`{sourceKey, chosenText}`): dịch/dịch lại chương CỦA TRUYỆN đó tự dùng
+  nghĩa đã chọn, không tạo marker cho khóa này nữa.
+- **Không hỏi lại** → `POST /stories/{id}/ignored-words` (`{sourceKey}` hoặc
+  `{meanings}`): bỏ marker khóa này cho riêng truyện (khác file chung
+  `no_mark.txt`).
+- `GET/DELETE` 2 endpoint trên để xem/huỷ; hai bảng `StoryWordChoices`,
+  `StoryIgnoredWords` (migration `migrate_story_words.sql`, FK CASCADE).
+
+### Quy tắc học từ hành vi (backend — không còn màn "Quy tắc" trong app)
+
+Bỏ qua một từ đủ **5 lượt** (`LEARN_SKIP_THRESHOLD`) → khóa tự vào bảng
+chung `UserMarkRules`: hết hiện marker ở **MỌI truyện** của người đó (không
+cần bỏ qua lại từng truyện). Tự học offline, không AI — backend tự học dù
+màn “Quy tắc đánh dấu” đã gỡ khỏi app Flutter:
+
+- `GET /me/mark-rules` — danh sách kèm `meanings` (nghĩa tiếng Việt tra từ
+  từ điển); chỉ hiển thị nghĩa — **không bao giờ lộ khóa chữ Trung**.
+- `DELETE /me/mark-rules/{ruleId}` — xoá 1 quy tắc → từ này lại được hỏi;
+  bấm "Không hỏi lại" lại thì quy tắc tự sinh tiếp.
+- Sửa file từ điển → `POST /dictionary/names/reload` (hoặc
+  `mark-lists/reload`) để meanings mới nhất — không cần restart.
+
+### Đo chương Qidian thật trước/sau từng mức
+
+```bash
+cd backend && PYTHONUTF8=1 .venv/Scripts/python.exe _measure_levels.py
+# Chương 第1章 永夜 — 2614 ký tự Trung (m.qidian.com, miễn phí):
+#   trước — không gợi ý :   0 marker
+#   sau — low           :  15 marker (đúng trần 15) ✓
+#   sau — medium        :  40 marker (đúng trần 40) ✓
+#   sau — high          : 348 marker (không giới hạn) ✓
+#   resolve(high) == bản không-marker → True
+```
+
+### Hướng dẫn test tay (A3.13)
+
+```bash
+# Backend (bật server trước):
+cd backend && PYTHONUTF8=1 ./.venv/Scripts/python.exe test_marking.py       # 80/80
+cd backend && PYTHONUTF8=1 ./.venv/Scripts/python.exe test_alternatives.py  # 55/55
+cd backend && PYTHONUTF8=1 ./.venv/Scripts/python.exe test_api.py           # 314/314
+cd backend && PYTHONUTF8=1 ./.venv/Scripts/python.exe test_offline.py       # 12/12 (chế độ dict không gọi mạng)
+cd backend && PYTHONUTF8=1 ./.venv/Scripts/python.exe test_golden_translate.py # 10/10 (golden — khớp từng byte, không cần server)
+
+# Flutter:
+flutter test   # 147/147 (gồm alternatives_test, mức gợi ý)
+```
+
+App: mở chương có marker → chạm marker → **Luôn dùng nghĩa này** (hoặc
+**Không hỏi lại**) → marker biến mất, giữ nguyên qua lần dịch lại.
 
 ---
 

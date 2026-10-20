@@ -9,6 +9,7 @@ import '../widgets/error_state.dart';
 import '../widgets/skeleton.dart';
 import 'chapter_form_screen.dart';
 import 'chapter_import_sheet.dart';
+import 'replace_screen.dart';
 import 'story_form_screen.dart';
 
 /// Quản lý chương của một truyện — A3.9 (Bước 9).
@@ -16,11 +17,7 @@ import 'story_form_screen.dart';
 /// Danh sách chương (thêm / sửa / xoá) + lối vào sửa thông tin truyện.
 /// Mọi thao tác pop về sẽ nạp lại để hiển thị số chương mới nhất.
 class ChapterManagerScreen extends StatefulWidget {
-  const ChapterManagerScreen({
-    super.key,
-    this.api,
-    required this.story,
-  });
+  const ChapterManagerScreen({super.key, this.api, required this.story});
 
   /// Tiêm nguồn dữ liệu (test dùng mock, app thật dùng HTTP).
   final ApiService? api;
@@ -124,6 +121,16 @@ class _ChapterManagerScreenState extends State<ChapterManagerScreen> {
     if (mounted) _load();
   }
 
+  /// Màn "Tìm & thay thế" cả truyện — quay về nạp lại danh sách.
+  Future<void> _openReplace() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ReplaceScreen(api: _api, storyId: _story.id),
+      ),
+    );
+    if (mounted) _load();
+  }
+
   /// Xác nhận rồi xoá chương.
   Future<void> _confirmDelete(ChapterSummary chapter) async {
     final bool? ok = await showDialog<bool>(
@@ -178,6 +185,11 @@ class _ChapterManagerScreenState extends State<ChapterManagerScreen> {
       appBar: AppBar(
         title: const Text('Quản lý chương'),
         actions: <Widget>[
+          IconButton(
+            onPressed: _openReplace,
+            icon: const Icon(Icons.find_replace_rounded),
+            tooltip: 'Tìm & thay thế',
+          ),
           IconButton(
             onPressed: _editStory,
             icon: const Icon(Icons.edit_outlined),
@@ -252,8 +264,7 @@ class _ChapterManagerScreenState extends State<ChapterManagerScreen> {
                       ? const EmptyState(
                           icon: Icons.article_outlined,
                           title: 'Chưa có chương nào',
-                          message:
-                              'Bấm "Chương mới" để thêm chương đầu tiên của truyện.',
+                          message: 'Bấm "Chương mới" để thêm chương đầu tiên của truyện.',
                         )
                       : ListView.builder(
                           padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
@@ -284,8 +295,9 @@ class _ChapterManagerScreenState extends State<ChapterManagerScreen> {
                                           PopupMenuItem<String>(
                                             value: 'edit',
                                             child: ListTile(
-                                              leading:
-                                                  Icon(Icons.edit_outlined),
+                                              leading: Icon(
+                                                Icons.edit_outlined,
+                                              ),
                                               title: Text('Sửa chương'),
                                               contentPadding: EdgeInsets.zero,
                                             ),

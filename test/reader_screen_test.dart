@@ -183,7 +183,7 @@ class _FailingChapterApi extends MockApiService {
   _FailingChapterApi() : super(latency: Duration.zero, useCoverImages: false);
 
   @override
-  Future<Chapter> fetchChapter(int chapterId) async {
+  Future<Chapter> fetchChapter(int chapterId, {bool raw = false}) async {
     throw const ApiException(
       'Không kết nối được máy chủ. Kiểm tra Wi-Fi và địa chỉ API.',
     );

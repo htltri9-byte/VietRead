@@ -1,15 +1,31 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../models/chapter.dart';
+import '../models/story_word.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
+import '../utils/alternatives.dart';
+import '../utils/marker_text_controller.dart';
+import '../widgets/chapter_form_dialogs.dart';
 import '../widgets/error_state.dart';
+import '../widgets/marker_picker_sheet.dart';
+import '../widgets/marker_tool_bar.dart';
 
 /// Form thêm / sửa chương — A3.9 (Bước 9).
 ///
 /// - `chapter == null` → thêm mới (POST /stories/{id}/chapters);
 /// - `chapter != null` → sửa (PUT /chapters/{id}); cần tải nội dung trước
 ///   vì danh sách chỉ trả `ChapterSummary` (không có content).
+///
+/// Khi sửa, tải bản **thô** (`?raw=1`) để thấy marker nhiều nghĩa `{a|b}`;
+/// chọn nghĩa xong marker được thay bằng đúng nghĩa đó rồi mới Lưu.
+/// Người đọc chỉ thấy nghĩa đầu (backend resolve trước khi trả).
+///
+/// Giao diện tách thành phần riêng: [MarkerEditingController] (tô sáng
+/// marker trong ô nội dung), [MarkerToolBar] (thanh công cụ chọn nghĩa),
+/// các dialog trong `widgets/chapter_form_dialogs.dart` và
+/// [MarkerPickerSheet] — State này giữ toàn bộ logic chọn nghĩa / lưu.
 class ChapterFormScreen extends StatefulWidget {
   const ChapterFormScreen({
     super.key,
@@ -35,14 +51,23 @@ class _ChapterFormScreenState extends State<ChapterFormScreen> {
 
   late final TextEditingController _index;
   late final TextEditingController _title;
-  late final TextEditingController _content;
+  late final MarkerEditingController _content;
 
   /// Đang tải nội dung chương khi sửa (chưa xong chưa hiện form).
   bool _loading = true;
   Object? _error;
   bool _saving = false;
+  bool _retranslating = false;
   bool _titleError = false;
   bool _contentError = false;
+
+  /// Số chỗ nhiều nghĩa còn lại — chỉ setState khi số này đổi (gõ trơn).
+  int _markerCount = 0;
+
+  /// Chỗ đã ghi nghĩa gần nhất, còn dùng khi sheet đang mở — cho phép đổi ý
+  /// chọn nghĩa khác khi KHÔNG bật “Tự chuyển sang chỗ tiếp theo”
+  /// (marker đã bị thay khỏi văn bản nên không parse lại được nữa).
+  ({int start, String text})? _applied;
 
   bool get _isEdit => widget.chapter != null;
 
@@ -53,7 +78,8 @@ class _ChapterFormScreenState extends State<ChapterFormScreen> {
       text: _isEdit ? '${widget.chapter!.index}' : '',
     );
     _title = TextEditingController(text: widget.chapter?.title ?? '');
-    _content = TextEditingController();
+    _content = MarkerEditingController();
+    _content.addListener(_onContentChanged);
     if (_isEdit) {
       _loadChapter();
     } else {
@@ -63,13 +89,25 @@ class _ChapterFormScreenState extends State<ChapterFormScreen> {
 
   @override
   void dispose() {
+    _content.removeListener(_onContentChanged);
     _index.dispose();
     _title.dispose();
     _content.dispose();
     super.dispose();
   }
 
-  /// Sửa chương → GET /chapters/{id} lấy nội dung đầy đủ.
+  /// Chỉ cập nhật nhãn "Còn N chỗ" khi số marker đổi → gõ không bị giật.
+  void _onContentChanged() {
+    final int count = countMarkers(_content.text);
+    if (count == _markerCount) return;
+    if (!mounted) {
+      _markerCount = count;
+      return;
+    }
+    setState(() => _markerCount = count);
+  }
+
+  /// Sửa chương → GET /chapters/{id}?raw=1 lấy bản thô (kèm marker nhiều nghĩa).
   Future<void> _loadChapter() async {
     setState(() {
       _loading = true;
@@ -77,11 +115,15 @@ class _ChapterFormScreenState extends State<ChapterFormScreen> {
     });
     try {
       _api.setToken(AuthService.instance.session?.token);
-      final Chapter chapter = await _api.fetchChapter(widget.chapter!.id);
+      final Chapter chapter = await _api.fetchChapter(
+        widget.chapter!.id,
+        raw: true,
+      );
       if (!mounted) return;
       setState(() {
         _title.text = chapter.title;
         _content.text = chapter.content;
+        _markerCount = countMarkers(chapter.content);
         _loading = false;
       });
     } catch (e) {
@@ -107,11 +149,369 @@ class _ChapterFormScreenState extends State<ChapterFormScreen> {
       ..showSnackBar(SnackBar(content: Text(text)));
   }
 
+  // ------------------------- Chọn nghĩa (marker) -------------------------
+
+  /// Chạm vào ô nội dung → nếu trúng marker thì mở sheet chọn nghĩa.
+  void _handleContentTap() {
+    final int offset = _content.selection.baseOffset;
+    if (offset < 0) return;
+    final Marker? marker = markerAt(_content.text, offset);
+    if (marker != null) _openMarkerSheet(marker);
+  }
+
+  /// Nút "Duyệt nghĩa": nhảy marker kế tiếp (vòng vòng) rồi mở sheet.
+  void _browseMarkers() {
+    final List<Marker> markers = parseMarkers(_content.text);
+    if (markers.isEmpty) return;
+    final int cursor = _content.selection.baseOffset;
+    Marker? next;
+    for (final Marker m in markers) {
+      if (m.start >= cursor) {
+        next = m;
+        break;
+      }
+    }
+    next ??= markers.first;
+    _content.selection = TextSelection.collapsed(offset: next.start);
+    _openMarkerSheet(next);
+  }
+
+  /// Marker kế tiếp / trước đó quanh [marker] (vòng vòng theo danh sách).
+  /// Quay sang chỗ khác → quên mốc đã ghi ([_applied]) — chỗ mới là marker thật.
+  Marker? _neighborMarker(Marker marker, {required bool forward}) {
+    _applied = null;
+    final List<Marker> markers = parseMarkers(_content.text);
+    if (markers.isEmpty) return null;
+    int idx = markers.indexWhere(
+      (Marker m) => m.start == marker.start && m.end == marker.end,
+    );
+    if (idx < 0) {
+      idx = markers.indexWhere((Marker m) => m.start >= marker.start);
+    }
+    if (idx < 0) idx = markers.length - 1;
+    final int next = forward ? idx + 1 : idx - 1;
+    return markers[(next + markers.length) % markers.length];
+  }
+
+  /// Vị trí hiện tại của marker đang mở: (index 0-based, tổng số chỗ).
+  /// Marker đã bị ghi thành nghĩa thuần (không tự chuyển) → vẫn cho biết chỗ
+  /// đó đứng thứ mấy tính từ đầu chương.
+  ({int index, int total})? _markerPosition(Marker marker) {
+    final List<Marker> markers = parseMarkers(_content.text);
+    if (markers.isEmpty) return null;
+    final int live = markers.indexWhere(
+      (Marker m) => m.start == marker.start && m.end == marker.end,
+    );
+    if (live >= 0) return (index: live, total: markers.length);
+    final ({int start, String text})? applied = _applied;
+    if (applied != null) {
+      final int before = markers
+          .where((Marker m) => m.start < applied.start)
+          .length;
+      return (
+        index: before.clamp(0, markers.length - 1),
+        total: markers.length,
+      );
+    }
+    return null;
+  }
+
+  /// Ranh giới [marker] trong văn bản LIVE: còn nguyên → đúng vị trí; đã bị
+  /// ghi thành nghĩa → span của nghĩa đó (ngữ cảnh trong sheet đúng chỗ).
+  ({int start, int end}) _markerBounds(Marker marker) {
+    final String text = _content.text;
+    final List<Marker> markers = parseMarkers(text);
+    for (final Marker m in markers) {
+      if (m.start == marker.start && m.end == marker.end) {
+        return (start: m.start, end: m.end);
+      }
+    }
+    final ({int start, String text})? applied = _applied;
+    if (applied != null &&
+        applied.start <= text.length &&
+        applied.start + applied.text.length <= text.length &&
+        text.substring(applied.start, applied.start + applied.text.length) ==
+            applied.text) {
+      return (start: applied.start, end: applied.start + applied.text.length);
+    }
+    return (
+      start: marker.start.clamp(0, text.length),
+      end: marker.end.clamp(0, text.length),
+    );
+  }
+
+  Future<void> _openMarkerSheet(Marker marker) async {
+    _applied = null; // mở sheet mới → quên mốc đã ghi trước đó
+    final ValueNotifier<Marker> current = ValueNotifier<Marker>(marker);
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        builder: (BuildContext ctx) => MarkerPickerSheet(
+          current: current,
+          textOf: () => _content.text,
+          positionOf: _markerPosition,
+          boundsOf: _markerBounds,
+          // Các thao tác KHÔNG đóng sheet — sheet tự quyết định đóng/không
+          // dựa trên số marker còn lại + công tắc “Tự chuyển sang chỗ tiếp theo”.
+          onPick: (Marker target, String meaning, bool applyAll) {
+            _applyMeaning(target, meaning, applyAll: applyAll);
+            return parseMarkers(_content.text).isNotEmpty;
+          },
+          onUseForStory: _useMeaningForStory,
+          onIgnore: _ignoreMarkerWord,
+          onNavigate: (bool forward) {
+            final Marker? next = _neighborMarker(
+              current.value,
+              forward: forward,
+            );
+            if (next != null) current.value = next;
+            return next != null;
+          },
+          onClose: () {
+            if (mounted) Navigator.of(ctx).pop();
+          },
+        ),
+      );
+    } finally {
+      current.dispose();
+    }
+  }
+
+  /// Thay marker bằng nghĩa đã chọn (bỏ dấu `{}`).
+  /// [applyAll] = thay mọi marker có **cùng danh sách nghĩa**.
+  ///
+  /// Trả về `true` nếu SAU khi thay vẫn còn marker trong ô nội dung (sheet
+  /// dùng để quyết định đóng hay tự chuyển chỗ tiếp theo). Nếu marker đã bị
+  /// thay trước đó (đổi ý khi không bật tự chuyển) → thay tại đúng chỗ đã ghi.
+  bool _applyMeaning(Marker marker, String meaning, {bool applyAll = false}) {
+    final String text = _content.text;
+    if (marker.end <= text.length) {
+      final List<Marker> markers = parseMarkers(text);
+      final bool live = markers.any(
+        (Marker m) => m.start == marker.start && m.end == marker.end,
+      );
+      if (live) {
+        final StringBuffer buf = StringBuffer();
+        int pos = 0;
+        int firstStart = -1;
+        for (final Marker m in markers) {
+          final bool hit = applyAll
+              ? listEquals(m.meanings, marker.meanings)
+              : (m.start == marker.start && m.end == marker.end);
+          if (!hit) continue;
+          if (firstStart < 0) firstStart = m.start;
+          buf.write(text.substring(pos, m.start));
+          buf.write(meaning);
+          pos = m.end;
+        }
+        if (firstStart >= 0) {
+          buf.write(text.substring(pos));
+          _content.text = buf.toString();
+          _content.selection = TextSelection.collapsed(
+            offset: (firstStart + meaning.length).clamp(
+              0,
+              _content.text.length,
+            ),
+          );
+          _applied = (start: firstStart, text: meaning);
+          return parseMarkers(_content.text).isNotEmpty;
+        }
+      }
+    }
+    // Đã ghi trước đó (đổi ý lần 2 khi sheet vẫn mở) → thay đúng span đã ghi
+    final ({int start, String text})? applied = _applied;
+    if (applied != null &&
+        applied.start <= text.length &&
+        applied.start + applied.text.length <= text.length &&
+        text.substring(applied.start, applied.start + applied.text.length) ==
+            applied.text) {
+      final String updated = text.replaceRange(
+        applied.start,
+        applied.start + applied.text.length,
+        meaning,
+      );
+      _content.text = updated;
+      _content.selection = TextSelection.collapsed(
+        offset: (applied.start + meaning.length).clamp(0, updated.length),
+      );
+      _applied = (start: applied.start, text: meaning);
+      return parseMarkers(updated).isNotEmpty;
+    }
+    return parseMarkers(_content.text).isNotEmpty;
+  }
+
+  /// Thay MỌI marker cùng DANH SÁCH NGHĨA trong ô nội dung bằng [meaning] —
+  /// dùng sau khi đã “luôn dùng” / “không hỏi lại” (backend áp dụng cho mọi
+  /// khóa có marker trùng danh sách nghĩa). Trả `true` nếu vẫn còn marker.
+  bool _applyMeaningsList(Marker marker, String meaning) {
+    final String text = _content.text;
+    final List<Marker> markers = parseMarkers(text);
+    final StringBuffer buf = StringBuffer();
+    int pos = 0;
+    int firstStart = -1;
+    for (final Marker m in markers) {
+      if (!listEquals(m.meanings, marker.meanings)) continue;
+      if (firstStart < 0) firstStart = m.start;
+      buf.write(text.substring(pos, m.start));
+      buf.write(meaning);
+      pos = m.end;
+    }
+    if (firstStart < 0) {
+      // Không còn chỗ nào khớp — giữ nguyên văn bản
+      return parseMarkers(text).isNotEmpty;
+    }
+    buf.write(text.substring(pos));
+    _content.text = buf.toString();
+    _content.selection = TextSelection.collapsed(
+      offset: (firstStart + meaning.length).clamp(0, _content.text.length),
+    );
+    _applied = (start: firstStart, text: meaning);
+    return parseMarkers(_content.text).isNotEmpty;
+  }
+
+  /// “Luôn dùng nghĩa này” — gửi DANH SÁCH NGHĨA cho backend (client không
+  /// gửi chữ Hán — backend tự tra ngược khóa từ điển), rồi thay mọi marker
+  /// cùng danh sách nghĩa. Có SnackBar kèm Hoàn tác.
+  /// Trả `true` nếu vẫn còn marker trong ô nội dung.
+  Future<bool> _useMeaningForStory(Marker marker, String meaning) async {
+    final String snapshot = _content.text;
+    try {
+      _api.setToken(AuthService.instance.session?.token);
+      final WordChoice saved = await _api.saveWordChoice(
+        widget.storyId,
+        sourceKey: marker.key, // marker dữ liệu cũ mới có khóa — optional
+        chosenText: meaning,
+        meanings: marker.meanings,
+      );
+      if (!mounted) return false;
+      final bool remains = _applyMeaningsList(marker, meaning);
+      _showUndo('Đã "luôn dùng" "$meaning" cho cả truyện.', () async {
+        final List<int> ids = saved.affectedIds.isNotEmpty
+            ? saved.affectedIds
+            : <int>[saved.id];
+        for (final int id in ids) {
+          try {
+            await _api.deleteWordChoice(widget.storyId, id);
+          } catch (_) {
+            // đã xoá / mất mạng — bỏ qua, SnackBar chỉ hiển thị ngắn
+          }
+        }
+        if (mounted) {
+          _applied = null;
+          _content.text = snapshot;
+        }
+      });
+      return remains;
+    } catch (e) {
+      _showMessage(
+        e is ApiException ? e.message : 'Không lưu được nghĩa cho cả truyện.',
+      );
+      return parseMarkers(_content.text).isNotEmpty;
+    }
+  }
+
+  /// “Không hỏi lại từ này” — bỏ marker: bản dịch sau tự lấy nghĩa đầu.
+  /// Gửi [meanings] cho backend tra ngược khóa; có SnackBar kèm Hoàn tác.
+  /// Trả `true` nếu vẫn còn marker trong ô nội dung.
+  Future<bool> _ignoreMarkerWord(Marker marker) async {
+    final String snapshot = _content.text;
+    try {
+      _api.setToken(AuthService.instance.session?.token);
+      final IgnoredWord saved = await _api.ignoreWord(
+        widget.storyId,
+        sourceKey: marker.key,
+        meanings: marker.meanings,
+      );
+      if (!mounted) return false;
+      final bool remains = _applyMeaningsList(marker, marker.first);
+      _showUndo('Đã bỏ qua "${marker.first}" — không hỏi lại nữa.', () async {
+        final List<int> ids = saved.affectedIds.isNotEmpty
+            ? saved.affectedIds
+            : <int>[saved.id];
+        for (final int id in ids) {
+          try {
+            await _api.deleteIgnoredWord(widget.storyId, id);
+          } catch (_) {
+            // bỏ qua
+          }
+        }
+        if (mounted) {
+          _applied = null;
+          _content.text = snapshot;
+        }
+      });
+      return remains;
+    } catch (e) {
+      _showMessage(e is ApiException ? e.message : 'Không bỏ qua được từ này.');
+      return parseMarkers(_content.text).isNotEmpty;
+    }
+  }
+
+  /// Thông báo có nút Hoàn tác — dành cho 2 thao tác ghi quy tắc theo truyện.
+  void _showUndo(String text, Future<void> Function() onUndo) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(text),
+          action: SnackBarAction(
+            label: 'Hoàn tác',
+            onPressed: () {
+              onUndo(); // fire-and-forget — SnackBar không đợi async
+            },
+          ),
+        ),
+      );
+  }
+
+  /// "Lấy nghĩa đầu cho tất cả" — hỏi xác nhận rồi bỏ toàn bộ marker.
+  Future<void> _resolveAllConfirm() async {
+    if (_markerCount == 0) return;
+    final bool ok = await showResolveAllConfirmDialog(
+      context,
+      markerCount: _markerCount,
+    );
+    if (!ok || !mounted) return;
+    setState(() => _content.text = resolveMarkers(_content.text));
+  }
+
+  /// "Dịch lại có gợi ý nghĩa" — gọi /retranslate, KHÔNG tự lưu.
+  Future<void> _retranslate() async {
+    if (!_isEdit || _saving || _retranslating) return;
+    final String? level = await showRetranslateDialog(context);
+    if (level == null || !mounted) return;
+    setState(() => _retranslating = true);
+    try {
+      _api.setToken(AuthService.instance.session?.token);
+      final String newContent = await _api.retranslateChapter(
+        widget.chapter!.id,
+        markLevel: level,
+      );
+      if (!mounted) return;
+      setState(() {
+        _content.text = newContent;
+        _markerCount = countMarkers(newContent);
+        _retranslating = false;
+      });
+      _showMessage('Đã dịch lại — chọn nghĩa rồi bấm Lưu để lưu.');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _retranslating = false);
+      _showMessage(
+        e is ApiException ? e.message : 'Không dịch lại được chương.',
+      );
+    }
+  }
+
+  // ------------------------- Lưu -------------------------
+
   /// Lưu — validate rồi POST/PUT; pop về màn quản lý để nạp lại.
   Future<void> _save() async {
     if (_saving) return;
     final String title = _title.text.trim();
-    final String content = _content.text;
+    String content = _content.text;
     bool bad = false;
     if (title.isEmpty) bad = true;
     if (content.trim().isEmpty) bad = true;
@@ -125,6 +525,21 @@ class _ChapterFormScreenState extends State<ChapterFormScreen> {
         _showMessage('Số chương phải là số nguyên lớn hơn 0.');
       }
       return;
+    }
+
+    // Còn marker chưa chọn nghĩa → hỏi người dùng.
+    final int remaining = countMarkers(content);
+    if (remaining > 0) {
+      final RemainingMarkersAction? choice =
+          await showRemainingMarkersDialog(
+        context,
+        remaining: remaining,
+      );
+      if (choice == null || !mounted) return;
+      if (choice == RemainingMarkersAction.resolveFirst) {
+        content = resolveMarkers(content);
+        _content.text = content;
+      }
     }
 
     setState(() => _saving = true);
@@ -156,6 +571,9 @@ class _ChapterFormScreenState extends State<ChapterFormScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Toolbar chỉ hiện khi có marker hoặc đang sửa chương.
+    final bool showTools = _isEdit || _markerCount > 0;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_isEdit ? 'Sửa chương' : 'Chương mới'),
@@ -210,6 +628,18 @@ class _ChapterFormScreenState extends State<ChapterFormScreen> {
                     if (_titleError) setState(() => _titleError = false);
                   },
                 ),
+                if (showTools) ...<Widget>[
+                  const SizedBox(height: 12),
+                  // ---------- Thanh công cụ chọn nghĩa ----------
+                  MarkerToolBar(
+                    markerCount: _markerCount,
+                    isEdit: _isEdit,
+                    retranslating: _retranslating,
+                    onBrowse: _browseMarkers,
+                    onResolveAll: _resolveAllConfirm,
+                    onRetranslate: _retranslate,
+                  ),
+                ],
                 const SizedBox(height: 12),
                 TextField(
                   controller: _content,
@@ -222,7 +652,11 @@ class _ChapterFormScreenState extends State<ChapterFormScreen> {
                     errorText: _contentError
                         ? 'Nội dung chương không được để trống'
                         : null,
+                    helperText: _markerCount > 0
+                        ? 'Chạm vào chỗ {nghĩa1|nghĩa2} để chọn nghĩa.'
+                        : null,
                   ),
+                  onTap: _handleContentTap,
                   onChanged: (_) {
                     if (_contentError) setState(() => _contentError = false);
                   },

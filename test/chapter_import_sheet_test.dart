@@ -11,8 +11,7 @@ import 'package:vietread/theme/app_theme.dart';
 /// Test bottom sheet **Thêm chương** (link Qidian / dán văn bản) mở từ
 /// màn Quản lý chương — A3.11.
 void main() {
-  const String validLink =
-      'https://m.qidian.com/chapter/1040765595/806596284/';
+  const String validLink = 'https://m.qidian.com/chapter/1040765595/806596284/';
 
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -221,10 +220,7 @@ void main() {
     await openSheet(tester);
     await tester.tap(find.text('Dán văn bản'));
     await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byType(TextField),
-      'Nội dung tiếng Việt khác.',
-    );
+    await tester.enterText(find.byType(TextField), 'Nội dung tiếng Việt khác.');
     await tester.pumpAndSettle();
     expect(
       find.text('Văn bản tiếng Việt được lưu nguyên, không dịch.'),
@@ -246,18 +242,72 @@ void main() {
       1,
       pageSize: 200,
     );
-    final ChapterSummary viCh =
-        chapters.firstWhere((ChapterSummary c) => c.index == 129);
+    final ChapterSummary viCh = chapters.firstWhere(
+      (ChapterSummary c) => c.index == 129,
+    );
     expect(
       (await mock.fetchChapter(viCh.id)).content,
       'Nội dung tiếng Việt giữ nguyên.',
     );
-    final ChapterSummary zhCh =
-        chapters.firstWhere((ChapterSummary c) => c.index == 130);
-    expect(
-      (await mock.fetchChapter(zhCh.id)).content,
-      startsWith('Bản dịch'),
+    final ChapterSummary zhCh = chapters.firstWhere(
+      (ChapterSummary c) => c.index == 130,
     );
+    expect((await mock.fetchChapter(zhCh.id)).content, startsWith('Bản dịch'));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('dán một lần là tự lưu, dán tiếp chương sau không bấm nút', (
+    WidgetTester tester,
+  ) async {
+    final MockApiService mock = api();
+    await pumpManager(tester, mock);
+    await openSheet(tester);
+    await tester.tap(find.text('Dán văn bản'));
+    await tester.pumpAndSettle();
+
+    // Dán một chương dài (> 120 ký tự) → đếm ngược rồi tự lưu.
+    final String first = ('Nội dung chương một dán thẳng vào ô. ' * 40).trim();
+    await tester.enterText(find.byType(TextField), first);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Sẽ tự lưu sau 1 giây'), findsOneWidget);
+    expect(find.text('Thêm chương'), findsOneWidget); // chưa tự lưu ngay
+
+    await tester.pump(const Duration(milliseconds: 1300));
+    await tester.pumpAndSettle();
+
+    // Tự lưu xong: sheet vẫn mở, ô được xoá để dán chương sau, hiện số chương.
+    expect(find.text('Thêm chương'), findsOneWidget);
+    expect(find.textContaining('Đã lưu chương 129'), findsOneWidget);
+    expect(find.text(first), findsNothing);
+    expect(find.text('Xong'), findsOneWidget);
+
+    // Dán chương thứ hai → tự lưu tiếp, không cần bấm nút.
+    final String second = ('Chương hai dán tiếp theo ngay sau đó. ' * 40)
+        .trim();
+    await tester.enterText(find.byType(TextField), second);
+    await tester.pump(const Duration(milliseconds: 1300));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Đã lưu chương 130'), findsOneWidget);
+
+    final List<ChapterSummary> chapters = await mock.fetchChapters(
+      1,
+      pageSize: 200,
+    );
+    expect(
+      chapters.map((ChapterSummary c) => c.index),
+      containsAll(<int>[129, 130]),
+    );
+    final ChapterSummary viCh = chapters.firstWhere(
+      (ChapterSummary c) => c.index == 129,
+    );
+    expect((await mock.fetchChapter(viCh.id)).content, first);
+
+    // Bấm "Xong" → đóng sheet, màn Quản lý chương nạp lại + SnackBar.
+    await tester.tap(find.widgetWithText(FilledButton, 'Xong'));
+    await tester.pumpAndSettle();
+    expect(find.text('Thêm chương'), findsNothing);
+    expect(find.text('Đã thêm chương mới.'), findsOneWidget);
+    expect(find.text('Đang ra · 130 chương'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -296,8 +346,9 @@ void main() {
       1,
       pageSize: 200,
     );
-    final ChapterSummary last =
-        chapters.firstWhere((ChapterSummary c) => c.index == 129);
+    final ChapterSummary last = chapters.firstWhere(
+      (ChapterSummary c) => c.index == 129,
+    );
     expect((await mock.fetchChapter(last.id)).content, '第一章 起风修改。');
     expect(tester.takeException(), isNull);
   });

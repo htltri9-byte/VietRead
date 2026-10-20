@@ -502,7 +502,7 @@ class DictionaryWordOut(BaseModel):
 
 
 # ===========================================================================
-# Gợi ý nhiều nghĩa: mức gợi ý + nghĩa đã chọn theo truyện + resolve-all
+# Gợi ý nhiều nghĩa: mức gợi ý + nghĩa đã chọn theo truyện + dọn marker (clean)
 # ===========================================================================
 
 
@@ -533,9 +533,9 @@ class RetranslateRequest(BaseModel):
 
 
 class ResolveAllRequest(BaseModel):
-    """POST /stories/{id}/markers/resolve-all — `{ onlyChapterId? }`.
+    """POST /stories/{id}/markers/clean — `{ onlyChapterId? }`.
 
-    `onlyChapterId` — chỉ lấy nghĩa đầu cho một chương; thiếu = cả truyện.
+    `onlyChapterId` — chỉ dọn một chương; thiếu = cả truyện.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -544,7 +544,7 @@ class ResolveAllRequest(BaseModel):
 
 
 class ResolveAllOut(BaseModel):
-    """POST /stories/{id}/markers/resolve-all — snapshot vào ChapterRevisions
+    """POST /stories/{id}/markers/clean — snapshot vào ChapterRevisions
     (dùng `POST /stories/{id}/replace/undo` để hoàn tác batch này)."""
 
     model_config = ConfigDict(populate_by_name=True)
