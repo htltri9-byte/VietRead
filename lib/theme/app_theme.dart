@@ -20,6 +20,10 @@ class AppColors {
 
   // ----- Dùng chung cho cả 2 chế độ -----
   static const Color primary = Color(0xFF1F6F6B); // xanh ngọc đậm
+
+  /// Bản sáng của xanh ngọc — dùng trên nền tối (thanh điều hướng, nhấn
+  /// nhạt…) để chữ nhỏ vẫn đạt tương phản dễ đọc.
+  static const Color primarySoft = Color(0xFF57BFB6);
   static const Color accent = Color(0xFFFF6B57); // san hô
   static const Color white = Color(0xFFFFFFFF);
 
@@ -45,6 +49,7 @@ class AppRadius {
 
   static const double card = 16; // card bo 16px
   static const double control = 12; // nút / ô nhập
+  static const double sheet = 24; // bottom sheet / dialog bo góc trên
   static const double pill = 24; // viên thuốc của bottom nav
   static const double round = 999; // chip bo tròn hoàn toàn
 }
@@ -99,12 +104,51 @@ class AppTheme {
       cardTheme: CardThemeData(
         color: surface,
         elevation: 0,
+        surfaceTintColor: Colors.transparent,
         margin: EdgeInsets.zero,
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppRadius.card),
           side: BorderSide(color: borderColor, width: 1),
         ),
+      ),
+      // Dialog: bo góc 20, viền mảnh, cùng font/chữ với theme
+      dialogTheme: DialogThemeData(
+        backgroundColor: surface,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.sheet),
+          side: BorderSide(color: borderColor),
+        ),
+        titleTextStyle: textTheme.titleLarge,
+        contentTextStyle: textTheme.bodyMedium,
+      ),
+      // BottomSheet: bo góc trên 24 + tay cầm kéo nhỏ ở trên (C6)
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: surface,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        showDragHandle: true,
+        dragHandleColor: borderColor,
+        dragHandleSize: const Size(36, 4),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(AppRadius.sheet),
+          ),
+          side: BorderSide(color: borderColor),
+        ),
+      ),
+      // Chuyển trang: fade + trượt lên nhẹ (~300ms chuẩn Material), không zoom nặng
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: <TargetPlatform, PageTransitionsBuilder>{
+          TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
+        },
+      ),
+      textSelectionTheme: TextSelectionThemeData(
+        cursorColor: AppColors.primary,
+        selectionColor: AppColors.primary.withValues(alpha: 0.25),
+        selectionHandleColor: AppColors.primary,
       ),
       appBarTheme: AppBarTheme(
         backgroundColor: background,
@@ -187,6 +231,9 @@ class AppTheme {
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
         backgroundColor: isDark ? surface : AppColors.ink,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.control),
+        ),
         contentTextStyle: textTheme.bodyMedium?.copyWith(
           color: isDark ? AppColors.inkNight : AppColors.white,
         ),

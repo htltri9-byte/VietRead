@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Theme khi Android TẮT dark mode: nền splash kem + logo giữa màn hình.
+     Android 12+ (API 31) đọc windowSplashScreen* để làm splash hệ thống. -->
+<resources>
+    <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:windowBackground">@drawable/launch_background</item>
+        <!-- Splash Android 12+: nền kem, logo bo góc (không còn icon vuông) -->
+        <item name="android:windowSplashScreenBackground">@color/splash_background</item>
+        <!-- Dùng adaptive icon làm splash icon (cách flutter_native_splash):
+             hệ thống tự bo mask tròn, nền xanh ngọc trùng launcher. -->
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+    </style>
+    <!-- Theme sau splash — đặt cùng màu nền splash để chuyển sang Flutter không chớp trắng -->
+    <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:windowBackground">@color/splash_background</item>
+    </style>
+</resources>

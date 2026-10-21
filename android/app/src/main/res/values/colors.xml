@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Màu dùng chung cho splash + icon launcher (sáng). -->
+<resources>
+    <!-- Nền splash chủ đề "Mực & Giấy" (giống AppColors.paper) -->
+    <color name="splash_background">#FAF6EE</color>
+    <!-- Lớp nền adaptive icon (giống AppColors.primary) -->
+    <color name="ic_launcher_background">#1F6F6B</color>
+</resources>

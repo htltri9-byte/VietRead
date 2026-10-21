@@ -19,8 +19,6 @@ class MarkerPickerSheet extends StatelessWidget {
     required this.positionOf,
     required this.boundsOf,
     required this.onPick,
-    required this.onUseForStory,
-    required this.onIgnore,
     required this.onNavigate,
     required this.onClose,
   });
@@ -39,12 +37,6 @@ class MarkerPickerSheet extends StatelessWidget {
 
   /// Chọn một nghĩa → áp dụng ngay; trả `true` nếu vẫn còn marker.
   final bool Function(Marker marker, String meaning, bool applyAll) onPick;
-
-  /// “Luôn dùng nghĩa này cho truyện này” → trả `true` nếu vẫn còn marker.
-  final Future<bool> Function(Marker marker, String meaning) onUseForStory;
-
-  /// “Không hỏi lại từ này” → trả `true` nếu vẫn còn marker.
-  final Future<bool> Function(Marker marker) onIgnore;
 
   /// Nhảy marker kế tiếp (`true`) / trước đó (`false`) — trả `false` nếu không
   /// có chỗ để nhảy.
@@ -69,8 +61,6 @@ class MarkerPickerSheet extends StatelessWidget {
               positionOf: positionOf,
               boundsOf: boundsOf,
               onPick: onPick,
-              onUseForStory: onUseForStory,
-              onIgnore: onIgnore,
               onNavigate: onNavigate,
               onClose: onClose,
             );
@@ -88,8 +78,6 @@ class _MarkerPickerBody extends StatefulWidget {
     required this.positionOf,
     required this.boundsOf,
     required this.onPick,
-    required this.onUseForStory,
-    required this.onIgnore,
     required this.onNavigate,
     required this.onClose,
   });
@@ -99,8 +87,6 @@ class _MarkerPickerBody extends StatefulWidget {
   final ({int index, int total})? Function(Marker) positionOf;
   final ({int start, int end}) Function(Marker) boundsOf;
   final bool Function(Marker marker, String meaning, bool applyAll) onPick;
-  final Future<bool> Function(Marker marker, String meaning) onUseForStory;
-  final Future<bool> Function(Marker marker) onIgnore;
   final bool Function(bool forward) onNavigate;
   final VoidCallback onClose;
 
@@ -111,7 +97,7 @@ class _MarkerPickerBody extends StatefulWidget {
 class _MarkerPickerBodyState extends State<_MarkerPickerBody> {
   final TextEditingController _custom = TextEditingController();
 
-  /// Nghĩa đang chọn — preview ngữ cảnh + giá trị cho 2 nút lưu theo truyện.
+  /// Nghĩa đang chọn — dùng cho preview ngữ cảnh xem trước.
   String _selected = '';
   bool _applyAll = false;
 
@@ -133,7 +119,7 @@ class _MarkerPickerBodyState extends State<_MarkerPickerBody> {
         !listEquals(oldWidget.marker.meanings, widget.marker.meanings);
     if (changed) {
       // Đổi sang chỗ khác: giữ lựa chọn nếu chỗ mới có đúng nghĩa đó
-      // (vừa chọn để “luôn dùng” rồi nhảy tiếp), không thì về nghĩa đầu.
+      // (vừa chọn ở chỗ trước rồi nhảy tiếp), không thì về nghĩa đầu.
       if (!widget.marker.meanings.contains(_selected)) {
         _selected = widget.marker.first;
       }
@@ -154,16 +140,6 @@ class _MarkerPickerBodyState extends State<_MarkerPickerBody> {
     HapticFeedback.selectionClick(); // rung nhẹ khi chọn
     setState(() => _selected = meaning);
     final bool remains = widget.onPick(widget.marker, meaning, _applyAll);
-    _afterChange(remains);
-  }
-
-  Future<void> _useForStory(String meaning) async {
-    final bool remains = await widget.onUseForStory(widget.marker, meaning);
-    _afterChange(remains);
-  }
-
-  Future<void> _ignore() async {
-    final bool remains = await widget.onIgnore(widget.marker);
     _afterChange(remains);
   }
 
@@ -420,22 +396,12 @@ class _MarkerPickerBodyState extends State<_MarkerPickerBody> {
                 selected: _applyAll,
                 onSelected: (bool v) => setState(() => _applyAll = v),
               ),
-              OutlinedButton.icon(
-                onPressed: () => _useForStory(_selected),
-                icon: const Icon(Icons.auto_stories, size: 18),
-                label: const Text('Luôn dùng nghĩa này cho truyện này'),
-              ),
-              OutlinedButton.icon(
-                onPressed: _ignore,
-                icon: const Icon(Icons.block, size: 18),
-                label: const Text('Không hỏi lại từ này'),
-              ),
             ],
           ),
           const SizedBox(height: 4),
           Text(
-            'Cùng danh sách nghĩa sẽ đổi theo; hai nút cuối lưu quy tắc theo '
-            'truyện — hiện SnackBar kèm Hoàn tác.',
+            'Chọn nghĩa sẽ áp dụng ngay vào ô nội dung; bật công tắc trên để '
+            'áp dụng cho mọi chỗ giống nhau trong chương.',
             style: theme.textTheme.bodySmall?.copyWith(
               color: scheme.onSurfaceVariant,
             ),

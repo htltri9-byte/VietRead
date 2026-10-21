@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
-/// Khối "xương" (skeleton) đang tải — hiệu ứng nhấp nháy nhẹ theo A2.
+import '../theme/app_spacing.dart';
+import '../theme/app_theme.dart';
+
+/// Khối "xương" (skeleton) đang tải — hiệu ứng shimmer quét ngang nhẹ (C4).
 class SkeletonBox extends StatefulWidget {
   const SkeletonBox({super.key, this.width, this.height = 16, this.radius = 8});
 
@@ -14,10 +17,12 @@ class SkeletonBox extends StatefulWidget {
 
 class _SkeletonBoxState extends State<SkeletonBox>
     with SingleTickerProviderStateMixin {
+  /// Shimmer quét ngang nhẹ 1.2s — màu lấy từ theme (sáng: vệt trắng,
+  /// tối: vệt trắng mờ) để đúng ngôn ngữ "Mực & Giấy".
   late final AnimationController _controller = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 900),
-  )..repeat(reverse: true);
+    duration: const Duration(milliseconds: 1200),
+  )..repeat();
 
   @override
   void dispose() {
@@ -27,16 +32,36 @@ class _SkeletonBoxState extends State<SkeletonBox>
 
   @override
   Widget build(BuildContext context) {
-    final Color base = Theme.of(context).colorScheme.outlineVariant;
-    return FadeTransition(
-      opacity: Tween<double>(begin: 0.35, end: 0.85).animate(_controller),
+    final ThemeData theme = Theme.of(context);
+    final Color base = theme.colorScheme.outlineVariant;
+    final BoxDecoration decoration = BoxDecoration(
+      color: base,
+      borderRadius: BorderRadius.circular(widget.radius),
+    );
+
+    // Hệ thống bật "giảm chuyển động" → skeleton đứng yên.
+    if (MediaQuery.disableAnimationsOf(context)) {
+      return Container(
+        width: widget.width,
+        height: widget.height,
+        decoration: decoration,
+      );
+    }
+
+    final Color highlight = Colors.white.withValues(
+      alpha: theme.brightness == Brightness.dark ? 0.06 : 0.75,
+    );
+    return ShaderMask(
+      blendMode: BlendMode.srcATop,
+      shaderCallback: (Rect bounds) => LinearGradient(
+        begin: Alignment(-1.0 - 2 * _controller.value, 0),
+        end: Alignment(1.0 - 2 * _controller.value, 0),
+        colors: <Color>[base, highlight, base],
+      ).createShader(bounds),
       child: Container(
         width: widget.width,
         height: widget.height,
-        decoration: BoxDecoration(
-          color: base,
-          borderRadius: BorderRadius.circular(widget.radius),
-        ),
+        decoration: decoration,
       ),
     );
   }
@@ -53,11 +78,20 @@ class ListSkeleton extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.md,
+        AppSpacing.lg,
+        AppSpacing.xl,
+      ),
       children: <Widget>[
         for (int i = 0; i < rows; i++) ...<Widget>[
-          SkeletonBox(width: double.infinity, height: 72, radius: 16),
-          if (i != rows - 1) const SizedBox(height: 10),
+          SkeletonBox(
+            width: double.infinity,
+            height: 72,
+            radius: AppRadius.card,
+          ),
+          if (i != rows - 1) const SizedBox(height: AppSpacing.md - 2),
         ],
       ],
     );
@@ -72,7 +106,12 @@ class HomeSkeleton extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.lg,
+        AppSpacing.lg,
+        AppSpacing.xl,
+      ),
       children: const [
         // Header + ô tìm kiếm
         Row(

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vietread/models/chapter.dart';
-import 'package:vietread/models/story_word.dart';
 import 'package:vietread/screens/chapter_form_screen.dart';
 import 'package:vietread/services/auth_service.dart';
 import 'package:vietread/services/mock_api_service.dart';
@@ -20,7 +19,7 @@ void main() {
     MockApiService.resetFollowsForTest();
     MockApiService.resetCommentsForTest();
     MockApiService.resetImportsForTest();
-  MockApiService.resetGlossaryForTest();
+    MockApiService.resetGlossaryForTest();
   });
 
   MockApiService api() =>
@@ -385,108 +384,6 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
-
-  testWidgets(
-    '"Luôn dùng nghĩa này" lưu cho cả truyện + thay mọi chỗ cùng nghĩa',
-    (WidgetTester tester) async {
-      final MockApiService mock = api();
-      // Dữ liệu CŨ còn khóa chữ Hán trong ô nội dung — sheet KHÔNG được
-      // hiển thị chữ Hán ở bất kỳ đâu, vẫn lưu được theo danh sách nghĩa.
-      final Chapter ch = await seedChapter(
-        mock,
-        'Còn {见过|khớp quá|gặp qua} và {见过|khớp quá|gặp qua} đây.',
-      );
-      await pumpForm(tester, mock, ch);
-
-      await tester.tap(find.widgetWithText(FilledButton, 'Còn 2 chỗ'));
-      await tester.pumpAndSettle();
-      expect(find.text('Chọn nghĩa'), findsOneWidget);
-
-      // KHÔNG có chữ Hán nào trong cây widget của sheet
-      bool hasCjkText(String value) => RegExp('[㐀-鿿豈-﫿]').hasMatch(value);
-      final Iterable<String> texts = tester
-          .widgetList<Text>(
-            find.descendant(
-              of: find.byType(BottomSheet),
-              matching: find.byType(Text),
-            ),
-          )
-          .map((Text t) => t.data ?? t.textSpan?.toPlainText() ?? '')
-          .where((String s) => s.isNotEmpty);
-      expect(texts.any(hasCjkText), isFalse, reason: 'sheet chứa chữ Hán');
-
-      // Chọn “gặp qua” trên thẻ → áp dụng chỗ đầu, tự chuyển sang chỗ thứ hai
-      // (nghĩa đã chọn được GIỮ khi chỗ mới có cùng nghĩa).
-      await tester.tap(find.text('gặp qua'));
-      await tester.pumpAndSettle();
-      expect(
-        contentField(tester).controller.text,
-        'Còn gặp qua và {见过|khớp quá|gặp qua} đây.',
-      );
-      expect(find.byType(BottomSheet), findsOneWidget); // vẫn còn 1 chỗ
-
-      await tester.tap(
-        find.widgetWithText(
-          OutlinedButton,
-          'Luôn dùng nghĩa này cho truyện này',
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.byType(BottomSheet), findsNothing); // hết marker → tự đóng
-      expect(
-        contentField(tester).controller.text,
-        'Còn gặp qua và gặp qua đây.',
-      );
-      expect(
-        find.text('Đã "luôn dùng" "gặp qua" cho cả truyện.'),
-        findsOneWidget,
-      );
-      expect(find.text('Hoàn tác'), findsOneWidget); // SnackBar kèm Hoàn tác
-
-      final List<WordChoice> choices = await mock.fetchWordChoices(ch.storyId);
-      expect(choices, hasLength(1));
-      expect(choices.single.sourceKey, '见过'); // khóa lưu NGẦM — không hiển thị
-      expect(choices.single.chosenText, 'gặp qua');
-      expect(tester.takeException(), isNull);
-    },
-  );
-
-  testWidgets(
-    '"Không hỏi lại từ này" bỏ marker và lưu khóa bỏ hỏi theo truyện',
-    (WidgetTester tester) async {
-      final MockApiService mock = api();
-      final Chapter ch = await seedChapter(
-        mock,
-        'Còn {见过|khớp quá|gặp qua} đây.',
-      );
-      await pumpForm(tester, mock, ch);
-
-      await tester.tap(find.widgetWithText(FilledButton, 'Còn 1 chỗ'));
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.widgetWithText(OutlinedButton, 'Không hỏi lại từ này'),
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.byType(BottomSheet), findsNothing);
-      // Lấy nghĩa đầu ngay trong ô nội dung
-      expect(contentField(tester).controller.text, 'Còn khớp quá đây.');
-      // Thông báo KHÔNG chứa chữ Hán (khóa lưu ngầm bên backend)
-      expect(
-        find.text('Đã bỏ qua "khớp quá" — không hỏi lại nữa.'),
-        findsOneWidget,
-      );
-      expect(find.text('Hoàn tác'), findsOneWidget);
-
-      final List<IgnoredWord> ignored = await mock.fetchIgnoredWords(
-        ch.storyId,
-      );
-      expect(ignored, hasLength(1));
-      expect(ignored.single.sourceKey, '见过');
-      expect(tester.takeException(), isNull);
-    },
-  );
 
   testWidgets('Dialog "Dịch lại" chọn mức gợi ý → gửi markLevel tương ứng', (
     WidgetTester tester,

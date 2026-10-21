@@ -35,10 +35,27 @@ class _MainShellState extends State<MainShell> {
   }
 
   static const List<NavItem> _items = [
-    NavItem(icon: Icons.explore_outlined, label: 'Khám phá'),
-    NavItem(icon: Icons.library_books_outlined, label: 'Tủ sách'),
-    NavItem(icon: Icons.edit_note_outlined, label: 'Đăng truyện'),
-    NavItem(icon: Icons.person_outline, label: 'Tài khoản'),
+    // outline khi chưa chọn, filled khi đang chọn (cùng kích thước)
+    NavItem(
+      icon: Icons.explore_outlined,
+      selectedIcon: Icons.explore,
+      label: 'Khám phá',
+    ),
+    NavItem(
+      icon: Icons.library_books_outlined,
+      selectedIcon: Icons.library_books,
+      label: 'Tủ sách',
+    ),
+    NavItem(
+      icon: Icons.edit_note_outlined,
+      selectedIcon: Icons.edit_note,
+      label: 'Đăng truyện',
+    ),
+    NavItem(
+      icon: Icons.person_outline,
+      selectedIcon: Icons.person,
+      label: 'Tài khoản',
+    ),
   ];
 
   /// Các tab — tạo 1 lần để `IndexedStack` giữ nguyên trạng thái mỗi tab.

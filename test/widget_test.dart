@@ -43,38 +43,70 @@ void main() {
   test('font nội dung chương là serif Noto Serif', () {
     expect(AppFonts.reading, 'NotoSerif');
     expect(AppFonts.ui, 'BeVietnamPro');
-  });
-
-  testWidgets('thanh điều hướng 4 mục và chuyển tab được', (tester) async {
+  });  testWidgets('thanh điều hướng 4 mục, mọi mục luôn có nhãn, chuyển tab đúng', (tester) async {
     await tester.pumpWidget(VietReadApp(api: mockApi()));
     await tester.pumpAndSettle();
 
-    // Tab đang chọn có label; tab chưa chọn chỉ có icon
+    // Mọi mục LUÔN hiển thị nhãn (không còn chỉ tab đang chọn)
     expect(navLabel('Khám phá'), findsOneWidget);
-    expect(navLabel('Tủ sách'), findsNothing);
+    expect(navLabel('Tủ sách'), findsOneWidget);
+    expect(navLabel('Đăng truyện'), findsOneWidget);
+    expect(navLabel('Tài khoản'), findsOneWidget);
+
+    // Kích thước thanh + từng mục trước khi chuyển tab — để so sánh bên dưới
+    final Size barBefore = tester.getSize(find.byType(FloatingNav));
+    final List<Size> itemBefore = <Size>[
+      for (int i = 0; i < 4; i++)
+        tester.getSize(find.byKey(ValueKey<int>(i))),
+    ];
 
     // Sang tab Tủ sách
-    await tester.tap(find.byIcon(Icons.library_books_outlined));
+    await tester.tap(
+      find.descendant(
+        of: find.byType(FloatingNav),
+        matching: find.byIcon(Icons.library_books_outlined),
+      ),
+    );
     await tester.pumpAndSettle();
-    expect(navLabel('Tủ sách'), findsOneWidget);
-    expect(navLabel('Khám phá'), findsNothing);
     expect(find.text('Tủ sách'), findsWidgets); // tiêu đề AppBar của tab
 
     // Sang tab Đăng truyện
-    await tester.tap(find.byIcon(Icons.edit_note_outlined));
+    await tester.tap(
+      find.descendant(
+        of: find.byType(FloatingNav),
+        matching: find.byIcon(Icons.edit_note_outlined),
+      ),
+    );
     await tester.pumpAndSettle();
-    expect(navLabel('Đăng truyện'), findsOneWidget);
-    expect(navLabel('Tủ sách'), findsNothing);
 
     // Sang tab Tài khoản
-    await tester.tap(find.byIcon(Icons.person_outline));
+    await tester.tap(
+      find.descendant(
+        of: find.byType(FloatingNav),
+        matching: find.byIcon(Icons.person_outline),
+      ),
+    );
     await tester.pumpAndSettle();
-    expect(navLabel('Tài khoản'), findsOneWidget);
 
     // Quay lại tab đầu
-    await tester.tap(find.byIcon(Icons.explore_outlined));
+    await tester.tap(
+      find.descendant(
+        of: find.byType(FloatingNav),
+        matching: find.byIcon(Icons.explore_outlined),
+      ),
+    );
     await tester.pumpAndSettle();
     expect(navLabel('Khám phá'), findsOneWidget);
+
+    // THANH VÀ TỪNG MỤC KHÔNG ĐỔI KÍCH THƯỚC sau 4 lần chuyển tab
+    expect(tester.getSize(find.byType(FloatingNav)), barBefore);
+    for (int i = 0; i < 4; i++) {
+      expect(
+        tester.getSize(find.byKey(ValueKey<int>(i))),
+        itemBefore[i],
+        reason: 'mục $i đổi kích thước khi chuyển tab',
+      );
+    }
   });
 
   testWidgets('tab Khám phá hiện nội dung thật (dữ liệu mock)', (tester) async {

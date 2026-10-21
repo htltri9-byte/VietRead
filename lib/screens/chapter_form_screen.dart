@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../models/chapter.dart';
-import '../models/story_word.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../utils/alternatives.dart';
@@ -258,8 +257,6 @@ class _ChapterFormScreenState extends State<ChapterFormScreen> {
             _applyMeaning(target, meaning, applyAll: applyAll);
             return parseMarkers(_content.text).isNotEmpty;
           },
-          onUseForStory: _useMeaningForStory,
-          onIgnore: _ignoreMarkerWord,
           onNavigate: (bool forward) {
             final Marker? next = _neighborMarker(
               current.value,
@@ -341,131 +338,6 @@ class _ChapterFormScreenState extends State<ChapterFormScreen> {
     return parseMarkers(_content.text).isNotEmpty;
   }
 
-  /// Thay MỌI marker cùng DANH SÁCH NGHĨA trong ô nội dung bằng [meaning] —
-  /// dùng sau khi đã “luôn dùng” / “không hỏi lại” (backend áp dụng cho mọi
-  /// khóa có marker trùng danh sách nghĩa). Trả `true` nếu vẫn còn marker.
-  bool _applyMeaningsList(Marker marker, String meaning) {
-    final String text = _content.text;
-    final List<Marker> markers = parseMarkers(text);
-    final StringBuffer buf = StringBuffer();
-    int pos = 0;
-    int firstStart = -1;
-    for (final Marker m in markers) {
-      if (!listEquals(m.meanings, marker.meanings)) continue;
-      if (firstStart < 0) firstStart = m.start;
-      buf.write(text.substring(pos, m.start));
-      buf.write(meaning);
-      pos = m.end;
-    }
-    if (firstStart < 0) {
-      // Không còn chỗ nào khớp — giữ nguyên văn bản
-      return parseMarkers(text).isNotEmpty;
-    }
-    buf.write(text.substring(pos));
-    _content.text = buf.toString();
-    _content.selection = TextSelection.collapsed(
-      offset: (firstStart + meaning.length).clamp(0, _content.text.length),
-    );
-    _applied = (start: firstStart, text: meaning);
-    return parseMarkers(_content.text).isNotEmpty;
-  }
-
-  /// “Luôn dùng nghĩa này” — gửi DANH SÁCH NGHĨA cho backend (client không
-  /// gửi chữ Hán — backend tự tra ngược khóa từ điển), rồi thay mọi marker
-  /// cùng danh sách nghĩa. Có SnackBar kèm Hoàn tác.
-  /// Trả `true` nếu vẫn còn marker trong ô nội dung.
-  Future<bool> _useMeaningForStory(Marker marker, String meaning) async {
-    final String snapshot = _content.text;
-    try {
-      _api.setToken(AuthService.instance.session?.token);
-      final WordChoice saved = await _api.saveWordChoice(
-        widget.storyId,
-        sourceKey: marker.key, // marker dữ liệu cũ mới có khóa — optional
-        chosenText: meaning,
-        meanings: marker.meanings,
-      );
-      if (!mounted) return false;
-      final bool remains = _applyMeaningsList(marker, meaning);
-      _showUndo('Đã "luôn dùng" "$meaning" cho cả truyện.', () async {
-        final List<int> ids = saved.affectedIds.isNotEmpty
-            ? saved.affectedIds
-            : <int>[saved.id];
-        for (final int id in ids) {
-          try {
-            await _api.deleteWordChoice(widget.storyId, id);
-          } catch (_) {
-            // đã xoá / mất mạng — bỏ qua, SnackBar chỉ hiển thị ngắn
-          }
-        }
-        if (mounted) {
-          _applied = null;
-          _content.text = snapshot;
-        }
-      });
-      return remains;
-    } catch (e) {
-      _showMessage(
-        e is ApiException ? e.message : 'Không lưu được nghĩa cho cả truyện.',
-      );
-      return parseMarkers(_content.text).isNotEmpty;
-    }
-  }
-
-  /// “Không hỏi lại từ này” — bỏ marker: bản dịch sau tự lấy nghĩa đầu.
-  /// Gửi [meanings] cho backend tra ngược khóa; có SnackBar kèm Hoàn tác.
-  /// Trả `true` nếu vẫn còn marker trong ô nội dung.
-  Future<bool> _ignoreMarkerWord(Marker marker) async {
-    final String snapshot = _content.text;
-    try {
-      _api.setToken(AuthService.instance.session?.token);
-      final IgnoredWord saved = await _api.ignoreWord(
-        widget.storyId,
-        sourceKey: marker.key,
-        meanings: marker.meanings,
-      );
-      if (!mounted) return false;
-      final bool remains = _applyMeaningsList(marker, marker.first);
-      _showUndo('Đã bỏ qua "${marker.first}" — không hỏi lại nữa.', () async {
-        final List<int> ids = saved.affectedIds.isNotEmpty
-            ? saved.affectedIds
-            : <int>[saved.id];
-        for (final int id in ids) {
-          try {
-            await _api.deleteIgnoredWord(widget.storyId, id);
-          } catch (_) {
-            // bỏ qua
-          }
-        }
-        if (mounted) {
-          _applied = null;
-          _content.text = snapshot;
-        }
-      });
-      return remains;
-    } catch (e) {
-      _showMessage(e is ApiException ? e.message : 'Không bỏ qua được từ này.');
-      return parseMarkers(_content.text).isNotEmpty;
-    }
-  }
-
-  /// Thông báo có nút Hoàn tác — dành cho 2 thao tác ghi quy tắc theo truyện.
-  void _showUndo(String text, Future<void> Function() onUndo) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(text),
-          action: SnackBarAction(
-            label: 'Hoàn tác',
-            onPressed: () {
-              onUndo(); // fire-and-forget — SnackBar không đợi async
-            },
-          ),
-        ),
-      );
-  }
-
   /// "Lấy nghĩa đầu cho tất cả" — hỏi xác nhận rồi bỏ toàn bộ marker.
   Future<void> _resolveAllConfirm() async {
     if (_markerCount == 0) return;
@@ -530,8 +402,7 @@ class _ChapterFormScreenState extends State<ChapterFormScreen> {
     // Còn marker chưa chọn nghĩa → hỏi người dùng.
     final int remaining = countMarkers(content);
     if (remaining > 0) {
-      final RemainingMarkersAction? choice =
-          await showRemainingMarkersDialog(
+      final RemainingMarkersAction? choice = await showRemainingMarkersDialog(
         context,
         remaining: remaining,
       );

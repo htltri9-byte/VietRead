@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Màu splash chủ đề tối (giống AppColors.night). -->
+<resources>
+    <color name="splash_background">#14181A</color>
+</resources>

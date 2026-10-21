@@ -42,16 +42,30 @@ class StoryCover extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final String? url = story.coverUrl;
-    if (url == null || url.isEmpty) return _fallback(context);
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
-      child: CachedNetworkImage(
-        imageUrl: url,
-        fit: BoxFit.cover,
-        placeholder: (context, _) => _fallback(context),
-        errorWidget: (context, _, _) => _fallback(context),
+    final Widget child;
+    if (url == null || url.isEmpty) {
+      child = _fallback(context);
+    } else {
+      child = ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: CachedNetworkImage(
+          imageUrl: url,
+          fit: BoxFit.cover,
+          placeholder: (context, _) => _fallback(context),
+          errorWidget: (context, _, _) => _fallback(context),
+        ),
+      );
+    }
+    // Viền mảnh nhẹ quanh bìa — đồng bộ với card (C3).
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(radius),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.6),
+        ),
       ),
+      child: child,
     );
   }
 }

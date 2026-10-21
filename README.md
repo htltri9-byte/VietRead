@@ -53,16 +53,40 @@ Backend mặc định chạy tại `http://127.0.0.1:8000`. Từ Bước 6 app g
 - Chế độ tối: nền `#14181A`, giữ nguyên màu nhấn — app tự chuyển theo hệ thống (`ThemeMode.system`).
 - Font bundle trong [`assets/fonts/`](assets/fonts): UI/tiêu đề **Be Vietnam Pro** (sans-serif),
   nội dung chương **Noto Serif** (serif) — đã kiểm tra đủ dấu tiếng Việt.
-- Bottom navigation dạng **viên thuốc nổi**, 4 mục: Khám phá · Tủ sách · Đăng truyện · Tài khoản;
-  mục đang chọn là pill xanh ngọc kèm nhãn.
+- Bottom navigation dạng **viên thuốc nổi**, 4 mục: Khám phá · Tủ sách · Đăng truyện · Tài khoản.
+  **Kích thước cố định**: 4 mục chia đều, mỗi mục LUÔN có icon + nhãn nhỏ (chỉ đổi màu khi chọn
+  qua fade ~180ms) — thanh không bao giờ co giãn, icon không dịch chỗ khi chuyển tab
+  ([`lib/widgets/floating_nav.dart`](lib/widgets/floating_nav.dart), test trong
+  [`test/floating_nav_test.dart`](test/floating_nav_test.dart)); nền tối dùng `AppColors.primarySoft`
+  để nhãn 11dp vẫn rõ.
 
-Tất cả màu/bo góc lấy từ [`lib/theme/app_theme.dart`](lib/theme/app_theme.dart)
-(`AppTheme.light()` / `AppTheme.dark()`) — widget không hard-code màu.
+Tất cả màu/bo góc/khoảng cách lấy từ [`lib/theme/app_theme.dart`](lib/theme/app_theme.dart)
+(`AppTheme.light()` / `AppTheme.dark()`) và [`lib/theme/app_spacing.dart`](lib/theme/app_spacing.dart)
+(AppSpacing 4/8/12/16/24/32, AppSizes cho điều khiển cố định) — widget không hard-code màu/số.
+Theme chung đã thiết lập sẵn: Card/Dialog bo góc + viền mảnh, BottomSheet bo góc 24 có tay cầm
+kéo, SnackBar bo góc, chuyển trang fade-slide (không zoom nặng), shimmer cho skeleton
+(tự đứng yên khi hệ thống bật "giảm chuyển động").
 
-- Icon app (launcher Android): nguồn [`assets/icon/vietread_icon_1024.png`](assets/icon/vietread_icon_1024.png)
-  (chỉ để sinh icon, không đưa vào bundle) → sinh 5 mức `mipmap-*` (48/72/96/144/192px)
-  bằng [`tool/generate_android_icons.ps1`](tool/generate_android_icons.ps1) — chạy lại script này
-  khi thay ảnh app.
+### Splash & icon launcher Android
+
+- **Splash** (nền kem `#FAF6EE` / tối `#14181A` + logo VietRead, không còn nền trắng/icon vuông):
+  - Android 12+ (API 31): [`values-v31/styles.xml`](android/app/src/main/res/values-v31/styles.xml)
+    (`windowSplashScreenBackground` + `windowSplashScreenAnimatedIcon` = adaptive icon);
+  - Android < 12: [`drawable/launch_background.xml`](android/app/src/main/res/drawable/launch_background.xml)
+    (nền màu + `drawable-*dpi/splash_logo.png` — logo bo góc sinh tự động);
+  - màu ở [`values/colors.xml`](android/app/src/main/res/values/colors.xml) (sáng) và
+    [`values-night/colors.xml`](android/app/src/main/res/values-night/colors.xml) (tối).
+- **Icon launcher**: nguồn [`assets/icon/vietread_icon_1024.png`](assets/icon/vietread_icon_1024.png)
+  (chỉ để sinh, không đưa vào bundle). [`tool/generate_android_icons.ps1`](tool/generate_android_icons.ps1)
+  sinh: icon PNG cũ (Android < 8), **adaptive icon** (nền xanh ngọc `#1F6F6B` + lớp trước tràn viền),
+  bản **monochrome** cho themed icon Android 13+, và splash logo. Chạy lại khi thay ảnh app:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool/generate_android_icons.ps1
+# rồi UNINSTALL app cũ (vì Android cache icon/splash theo package):
+#   adb uninstall com.example.vietread   (hoặc Gỡ cài đặt trên máy)
+flutter run   # hoặc flutter build apk --debug && flutter install --debug
+```
 
 ---
 
@@ -71,7 +95,8 @@ Tất cả màu/bo góc lấy từ [`lib/theme/app_theme.dart`](lib/theme/app_th
 ```
 lib/
   main.dart        # MaterialApp: theme sáng/tối, locale vi, home = MainShell
-  theme/           # app_theme.dart — màu, font, style nút/thẻ/nhập liệu
+  theme/           # app_theme.dart — màu, font, style nút/thẻ/nhập liệu/dialog/sheet,
+                    # app_spacing.dart — token khoảng cách & kích thước cố định
   models/          # story, chapter, comment, user, import_job, genre,
                     # reading_progress, downloaded_story (fromJson/toJson)
   services/         # api_config (cờ useMock), api_service (interface + HTTP),
@@ -670,7 +695,7 @@ chương → marker hiện nền cam; chạm vào để chọn nghĩa.
 
 ---
 
-## 10C. Mức gợi ý nhiều nghĩa + "Luôn dùng nghĩa này" / "Không hỏi lại" (A3.13)
+## 10C. Mức gợi ý nhiều nghĩa + quy tắc "luôn dùng" / "không hỏi lại" (A3.13)
 
 ### 3 mức gợi ý (`markLevel`) — bộ lọc marker phía từ điển
 
@@ -695,16 +720,17 @@ bỏ khóa 1 Hán (trừ `ambiguous.txt`) → bỏ tên riêng → khác nghĩa 
 - Màn **Sửa chương → Dịch lại** có SegmentedButton **Ít / Vừa / Nhiều** kèm
   giải thích trần; app gửi `markLevel` tương ứng.
 
-### "Luôn dùng nghĩa này" / "Không hỏi lại" — theo từng truyện
+### "Luôn dùng nghĩa này" / "Không hỏi lại" — backend còn, app đã gỡ nút
 
-Chạm marker → bottom sheet có 2 nút mới:
+> **Gỡ khỏi giao diện** (theo yêu cầu): sheet **Chọn nghĩa** không còn 2 nút
+> "Luôn dùng nghĩa này cho truyện này" và "Không hỏi lại từ này" — chọn nghĩa
+> vẫn áp dụng ngay vào ô nội dung và giữ được qua lần dịch lại. Backend vẫn
+> giữ nguyên API + dữ liệu các quy tắc này:
 
-- **Luôn dùng nghĩa này** → `POST /stories/{id}/word-choices`
-  (`{sourceKey, chosenText}`): dịch/dịch lại chương CỦA TRUYỆN đó tự dùng
-  nghĩa đã chọn, không tạo marker cho khóa này nữa.
-- **Không hỏi lại** → `POST /stories/{id}/ignored-words` (`{sourceKey}` hoặc
-  `{meanings}`): bỏ marker khóa này cho riêng truyện (khác file chung
-  `no_mark.txt`).
+- `POST /stories/{id}/word-choices` (`{sourceKey, chosenText}`): dịch/dịch lại
+  chương CỦA TRUYỆN đó tự dùng nghĩa đã chọn, không tạo marker cho khóa này.
+- `POST /stories/{id}/ignored-words` (`{sourceKey}` hoặc `{meanings}`): bỏ
+  marker khóa này cho riêng truyện (khác file chung `no_mark.txt`).
 - `GET/DELETE` 2 endpoint trên để xem/huỷ; hai bảng `StoryWordChoices`,
   `StoryIgnoredWords` (migration `migrate_story_words.sql`, FK CASCADE).
 
@@ -745,11 +771,11 @@ cd backend && PYTHONUTF8=1 ./.venv/Scripts/python.exe test_offline.py       # 12
 cd backend && PYTHONUTF8=1 ./.venv/Scripts/python.exe test_golden_translate.py # 10/10 (golden — khớp từng byte, không cần server)
 
 # Flutter:
-flutter test   # 147/147 (gồm alternatives_test, mức gợi ý)
+flutter test   # 148/148 (gồm alternatives_test, mức gợi ý)
 ```
 
-App: mở chương có marker → chạm marker → **Luôn dùng nghĩa này** (hoặc
-**Không hỏi lại**) → marker biến mất, giữ nguyên qua lần dịch lại.
+Mở chương có marker → chạm marker → chọn nghĩa → áp dụng ngay, giữ nguyên
+qua lần dịch lại (quy tắc "luôn dùng"/"không hỏi lại" chỉ còn qua API).
 
 ---
 
