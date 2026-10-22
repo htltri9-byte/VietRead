@@ -77,6 +77,8 @@ class OfflineService {
         id: story.id,
         title: story.title,
         author: story.author,
+        originalAuthor: story.originalAuthor,
+        uploaderName: story.uploaderName,
         coverPath: await _downloadCover(story),
         description: story.description,
       ),

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../models/story.dart';
 import '../theme/app_theme.dart';
+import 'story_credits.dart';
 
 /// Ảnh bìa dọc; không có ảnh hoặc lỗi mạng → nền gradient xanh ngọc + ký tự đầu tên truyện.
 class StoryCover extends StatelessWidget {
@@ -107,8 +108,9 @@ class StoryCard extends StatelessWidget {
                 style: theme.textTheme.titleSmall,
               ),
               const SizedBox(height: 4),
+              // Thẻ nhỏ: chỉ một dòng Tác giả (rút gọn), không thêm người đăng.
               Text(
-                story.author,
+                StoryCredits.cardAuthor(story),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.bodySmall?.copyWith(
@@ -197,7 +199,7 @@ class StoryTile extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      story.author,
+                      StoryCredits.cardAuthor(story),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall?.copyWith(

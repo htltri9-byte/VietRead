@@ -29,6 +29,9 @@ class _StoryFormScreenState extends State<StoryFormScreen> {
   late final TextEditingController _description;
   late final TextEditingController _cover;
 
+  /// Tác giả nguyên tác — không bắt buộc; rỗng thì backend lưu NULL.
+  late final TextEditingController _originalAuthor;
+
   /// Thể loại server trả về + thể loại người dùng tự nhập (chưa có server tự tạo).
   List<Genre> _allGenres = <Genre>[];
   final Set<String> _selectedGenres = <String>{};
@@ -45,6 +48,8 @@ class _StoryFormScreenState extends State<StoryFormScreen> {
     _title = TextEditingController(text: story?.title ?? '');
     _description = TextEditingController(text: story?.description ?? '');
     _cover = TextEditingController(text: story?.coverUrl ?? '');
+    // Truyện nhập từ link đã có sẵn tác giả từ nguồn → điền sẵn, vẫn sửa được.
+    _originalAuthor = TextEditingController(text: story?.originalAuthor ?? '');
     if (story != null) {
       _status = story.status;
       _isDraft = story.isDraft;
@@ -58,6 +63,7 @@ class _StoryFormScreenState extends State<StoryFormScreen> {
     _title.dispose();
     _description.dispose();
     _cover.dispose();
+    _originalAuthor.dispose();
     super.dispose();
   }
 
@@ -136,6 +142,7 @@ class _StoryFormScreenState extends State<StoryFormScreen> {
           status: _status,
           genres: _selectedGenres.toList(),
           isDraft: _isDraft,
+          originalAuthor: _originalAuthor.text,
         );
       } else {
         saved = await _api.updateStory(
@@ -146,6 +153,7 @@ class _StoryFormScreenState extends State<StoryFormScreen> {
           status: _status,
           genres: _selectedGenres.toList(),
           isDraft: _isDraft,
+          originalAuthor: _originalAuthor.text,
         );
       }
       if (!mounted) return;
@@ -217,7 +225,32 @@ class _StoryFormScreenState extends State<StoryFormScreen> {
               hintText: 'https://...',
             ),
           ),
-          const SizedBox(height: 16),
+          // ---------- Tác giả (nguyên tác) ----------
+          TextField(
+            controller: _originalAuthor,
+            textInputAction: TextInputAction.next,
+            maxLength: 200,
+            decoration: InputDecoration(
+              labelText: 'Tác giả (nguyên tác)',
+              hintText: 'Tên tác giả gốc của truyện...',
+              helperText:
+                  'Tên tác giả gốc của truyện. Nếu bạn tự sáng tác, hãy ghi tên bút danh của bạn.',
+              counterText: '',
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () {
+                final String? name = AuthService.instance.user?.name;
+                if (name == null || name.trim().isEmpty) return;
+                setState(() => _originalAuthor.text = name.trim());
+              },
+              icon: const Icon(Icons.person_outline_rounded, size: 18),
+              label: const Text('Dùng tên tài khoản của tôi'),
+            ),
+          ),
+          const SizedBox(height: 8),
 
           // ---------- Trạng thái ----------
           SegmentedButton<String>(

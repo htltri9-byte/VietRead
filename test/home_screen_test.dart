@@ -223,7 +223,9 @@ void main() {
 
     // Đã vào màn chi tiết: hiện tác giả + tab Chương/Bình luận + danh sách chương
     expect(find.byType(StoryDetailScreen), findsOneWidget);
-    expect(find.text('Trần Nhật Nam'), findsOneWidget);
+    // Dòng tác giả ở chi tiết là RichText 2 dòng (Tác giả + Người đăng).
+    expect(find.text('Tác giả: Trần Nhật Nam', findRichText: true),
+        findsOneWidget);
     expect(find.text('Bình luận'), findsOneWidget);
     expect(find.textContaining('Chương 1:'), findsOneWidget);
     expect(tester.takeException(), isNull);

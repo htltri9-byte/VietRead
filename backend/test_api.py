@@ -14,6 +14,7 @@ import time
 import httpx
 
 from app import alternatives, vietphrase  # parser marker + tra ngược nghĩa → khóa
+from app.services.import_worker import original_author_fields
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000"
 client = httpx.Client(base_url=BASE, timeout=20)
@@ -43,6 +44,8 @@ def auth(token: str) -> dict:
 STORY_KEYS = {
     "id", "title", "author", "coverUrl", "description", "genres",
     "status", "rating", "chapterCount", "updatedAt",
+    # TÁC GIẢ (nguyên tác) vs NGƯỜI ĐĂNG — 2 trường mới trong mọi response
+    "originalAuthor", "uploaderName",
 }
 
 print("\n=== GENRES ===")
@@ -66,6 +69,17 @@ check("tìm thấy truyện seed Kiếm Sư Vọng Tường", seed is not None)
 check("số chương + thể loại + tác giả đúng",
       seed and seed["chapterCount"] == 3 and "Tiên Hiệp" in seed["genres"]
       and seed["author"] == "Trần Nhật Nam", str(seed))
+check("seed cũ OriginalAuthor NULL → author tương thích = tên người đăng",
+      seed and seed["originalAuthor"] is None
+      and seed["uploaderName"] == "Trần Nhật Nam"
+      and seed["author"] == "Trần Nhật Nam", str(seed))
+
+print("\n=== TÁC GIẢ NGUYÊN TÁC (unit — không cần server) ===")
+check("parsed.author rỗng/None → (None, None), không hỏng job",
+      original_author_fields(None) == (None, None)
+      and original_author_fields("   ") == (None, None))
+check("tên Trung chuyển Hán-Việt bằng từ điển offline",
+      original_author_fields("演示作者") == ("Diễn Kì Tác Người", "演示作者"))
 
 r = client.get("/stories", params={"genre": "Tiên Hiệp"})
 check("lọc theo genre", r.status_code == 200 and len(r.json()) >= 1
@@ -152,6 +166,9 @@ check("trả đúng title/author/chapterCount/genres",
       and new_story["author"] == "Trần Nhật Nam"
       and new_story["chapterCount"] == 0
       and set(new_story["genres"]) == {"Tiên Hiệp", "Kiểm Thử"}, str(new_story))
+check("không gửi originalAuthor → null; uploaderName = người đăng",
+      new_story["originalAuthor"] is None
+      and new_story["uploaderName"] == "Trần Nhật Nam", str(new_story))
 sid = new_story["id"]
 
 r = client.get("/stories", params={"genre": "Kiểm Thử"})
@@ -170,6 +187,33 @@ r = client.put(f"/stories/{sid}", json={"title": "B2 Đổi Tên", "status": "co
 check("PUT /stories/{id} = 200", r.status_code == 200
       and r.json()["title"] == "B2 Đổi Tên" and r.json()["status"] == "completed"
       and r.json()["genres"] == ["Hệ Thống"], r.text)
+
+# --- Tác giả nguyên tác ≠ người đăng (tách bạch 2 khái niệm) ---
+r = client.put(f"/stories/{sid}", json={"originalAuthor": "  Băng Tụy Trà  "},
+               headers=auth(tac_gia))
+check("PUT originalAuthor = 200 (trim, author tương thích đổi theo)",
+      r.status_code == 200 and r.json()["originalAuthor"] == "Băng Tụy Trà"
+      and r.json()["uploaderName"] == "Trần Nhật Nam"
+      and r.json()["author"] == "Băng Tụy Trà", r.text)
+
+r = client.put(f"/stories/{sid}", json={"originalAuthor": "Người Khác"},
+               headers=auth(doc_gia))
+check("người khác sửa originalAuthor → 403 {message}",
+      r.status_code == 403 and "message" in r.json(), r.text)
+
+r = client.get("/stories", params={"query": "Băng Tụy Trà"})
+check("tìm theo originalAuthor (khác tên người đăng)",
+      r.status_code == 200 and any(s["id"] == sid for s in r.json()), r.text)
+
+r = client.get("/stories", params={"query": "Trần Nhật Nam"})
+check("vẫn tìm được theo tên người đăng (không mất kết quả cũ)",
+      r.status_code == 200 and len(r.json()) >= 4, r.text)
+
+r = client.put(f"/stories/{sid}", json={"originalAuthor": "   "},
+               headers=auth(tac_gia))
+check("originalAuthor rỗng → null (NULL trong DB)",
+      r.status_code == 200 and r.json()["originalAuthor"] is None
+      and r.json()["author"] == "Trần Nhật Nam", r.text)
 
 print("\n=== CRUD CHƯƠNG ===")
 r = client.post(f"/stories/{sid}/chapters",
@@ -415,6 +459,11 @@ check("truyện nhập là nháp (isDraft=true) để chỉnh sửa trước khi
       imported is not None and imported["isDraft"] is True, str(imported))
 check("truyện nhập có chương",
       imported is not None and imported["chapterCount"] >= 1, str(imported))
+check("truyện nhập có originalAuthor = bản Hán-Việt từ fixture 演示作者",
+      imported is not None
+      and imported["originalAuthor"] == "Diễn Kì Tác Người"
+      and imported["uploaderName"] == "Trần Nhật Nam"
+      and imported["author"] == "Diễn Kì Tác Người", str(imported))
 
 chs = client.get(f"/stories/{demo_sid}/chapters", headers=auth(tac_gia)).json()
 check("GET /stories/{id}/chapters (nháp, chủ nhân) ≥ 1 chương",
@@ -435,10 +484,14 @@ check("xoá truyện nhập sau kiểm thử", r.status_code == 200, r.text)
 
 print("\n=== THÊM CHƯƠNG VÀO TRUYỆN ĐÃ CÓ — /chapters/import + /import-text ===")
 # Truyện mới tinh để kiểm thử riêng (không đụng truyện seed).
-r = client.post("/stories", json={"title": "Truyện Kiểm Thử B11 Thêm Chương"},
-                headers=auth(tac_gia))
+r = client.post("/stories", json={
+    "title": "Truyện Kiểm Thử B11 Thêm Chương",
+    "originalAuthor": "Tác Giả Giữ Nguyên",
+}, headers=auth(tac_gia))
 check("tạo truyện cho kiểm thử thêm chương", r.status_code == 200, r.text)
 imp_sid = r.json()["id"]
+check("truyện tạo có originalAuthor ngay từ đầu",
+      r.json()["originalAuthor"] == "Tác Giả Giữ Nguyên", r.text)
 
 FREE_QIDIAN = "https://www.qidian.com/chapter/1040765595/806596284/"  # 第1章 永夜 (miễn phí)
 
@@ -482,6 +535,12 @@ check("số chương đọc từ tiêu đề 第1章 → index 1", new_ch["index
 check("content là bản dịch (khác bản gốc tiếng Trung)",
       new_ch["content"] and "那一天太阳落下" not in new_ch["content"],
       new_ch["content"][:80])
+
+# Thêm chương từ link KHÔNG được ghi đè OriginalAuthor đã có trên truyện
+r = client.get(f"/stories/{imp_sid}", headers=auth(tac_gia))
+check("thêm chương không ghi đè originalAuthor đã có",
+      r.status_code == 200
+      and r.json()["originalAuthor"] == "Tác Giả Giữ Nguyên", r.text)
 
 r = client.get(f"/stories/{imp_sid}/chapters", headers=auth(tac_gia))
 check("danh sách chương sau thêm = 1", r.status_code == 200 and len(r.json()) == 1,

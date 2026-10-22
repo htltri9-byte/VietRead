@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 
@@ -12,6 +11,9 @@ import '../services/prefs_service.dart';
 import '../services/reading_progress_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/error_state.dart';
+import '../widgets/reader_bottom_bar.dart';
+import '../widgets/reader_chapter_body.dart';
+import '../widgets/reader_settings_sheet.dart';
 import '../widgets/skeleton.dart';
 
 /// Màn **đọc truyện** (A3.5): nội dung chương, chuyển chương trước/sau,
@@ -294,112 +296,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Future<void> _openSettings() async {
-    ReaderSettings draft = _settings;
-    final ThemeData theme = Theme.of(context);
-
+    // Toàn bộ nội dung sheet nằm trong ReaderSettingsSheet (widget tách riêng);
+    // mỗi lựa chọn gọi ngược về _applySettings để áp dụng + lưu ngay.
     await showModalBottomSheet<void>(
       context: context,
       // Màu/bo góc/tay cầm lấy từ theme chung (bottomSheetTheme — C6)
-      builder: (BuildContext sheetContext) {
-        const List<(String, String)> backgrounds = <(String, String)>[
-          ('Sáng', ReaderSettings.bgLight),
-          ('Tối', ReaderSettings.bgDark),
-          ('Sepia', ReaderSettings.bgSepia),
-        ];
-
-        return SafeArea(
-          minimum: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-          // Cuộn được khi cỡ chữ hệ thống lớn hoặc màn hình thấp
-          child: SingleChildScrollView(
-            child: StatefulBuilder(
-              builder: (BuildContext context, StateSetter setSheetState) {
-                void change(ReaderSettings value) {
-                  setSheetState(() => draft = value);
-                  _applySettings(value);
-                }
-
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Cài đặt đọc', style: theme.textTheme.titleMedium),
-                    const SizedBox(height: 16),
-                    Text('Nền', style: theme.textTheme.labelLarge),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 8,
-                      children: <Widget>[
-                        for (final (String label, String value) in backgrounds)
-                          ChoiceChip(
-                            label: Text(label),
-                            selected: draft.background == value,
-                            onSelected: (_) =>
-                                change(draft.copyWith(background: value)),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    Text('Font chữ', style: theme.textTheme.labelLarge),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 8,
-                      children: <Widget>[
-                        ChoiceChip(
-                          label: const Text('Serif (Noto Serif)'),
-                          selected: draft.useSerif,
-                          onSelected: (_) =>
-                              change(draft.copyWith(useSerif: true)),
-                        ),
-                        ChoiceChip(
-                          label: const Text('Sans (Be Vietnam Pro)'),
-                          selected: !draft.useSerif,
-                          onSelected: (_) =>
-                              change(draft.copyWith(useSerif: false)),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    Text(
-                      'Cỡ chữ: ${draft.fontSize.round()}',
-                      style: theme.textTheme.labelLarge,
-                    ),
-                    Slider(
-                      value: draft.fontSize,
-                      min: 14,
-                      max: 28,
-                      divisions: 14,
-                      label: draft.fontSize.round().toString(),
-                      onChanged: (double v) =>
-                          change(draft.copyWith(fontSize: v)),
-                    ),
-                    Text(
-                      'Giãn dòng: ${draft.lineHeight.toStringAsFixed(1)}',
-                      style: theme.textTheme.labelLarge,
-                    ),
-                    Slider(
-                      value: draft.lineHeight,
-                      min: 1.3,
-                      max: 2.1,
-                      divisions: 8,
-                      label: draft.lineHeight.toStringAsFixed(1),
-                      onChanged: (double v) =>
-                          change(draft.copyWith(lineHeight: v)),
-                    ),
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton(
-                        onPressed: () => Navigator.of(sheetContext).pop(),
-                        child: const Text('Xong'),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-        );
-      },
+      builder: (BuildContext sheetContext) => ReaderSettingsSheet(
+        initial: _settings,
+        onChanged: _applySettings,
+      ),
     );
   }
 
@@ -445,14 +350,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
     return widget.story.title;
   }
 
-  TextStyle _contentStyle(ThemeData theme) =>
-      (theme.textTheme.bodyLarge ?? const TextStyle()).copyWith(
-        fontFamily: _settings.useSerif ? AppFonts.reading : AppFonts.ui,
-        fontSize: _settings.fontSize,
-        height: _settings.lineHeight,
-        color: _ink,
-      );
-
   String _errorMessage() {
     if (_error is ApiException) return (_error as ApiException).message;
     return 'Không tải được nội dung chương. Vui lòng thử lại.';
@@ -489,7 +386,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
         ],
       ),
       body: _body(theme),
-      bottomNavigationBar: _bottomBar(theme),
+      // Thanh điều khiển dưới tách riêng thành widget (cùng2 widget kia).
+      bottomNavigationBar: ReaderBottomBar(
+        background: _background,
+        ink: _ink,
+        index: _index,
+        progress: _progress,
+        onPrev: _index > 1 ? () => _goTo(_index - 1) : null,
+        onNext: () => _goTo(_index + 1),
+      ),
     );
   }
 
@@ -533,94 +438,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
       );
     }
 
-    final Chapter chapter = _chapter!;
-    return SingleChildScrollView(
+    // Cuộn do màn giữ controller (lưu tiến độ); nội dung trong widget tách riêng.
+    return ReaderChapterBody(
       controller: _scrollController,
-      // Lề đọc thoáng hơn hai bên, dễ chịu khi đọc dài (C7)
-      padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            chapter.title,
-            style: theme.textTheme.titleLarge?.copyWith(
-              fontFamily: _settings.useSerif ? AppFonts.reading : AppFonts.ui,
-              color: _ink,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Text(chapter.content, style: _contentStyle(theme)),
-          const SizedBox(height: 28),
-          Center(
-            child: Text(
-              '— Hết chương ${chapter.index} —',
-              style: theme.textTheme.labelMedium?.copyWith(color: _mutedInk),
-            ),
-          ),
-        ],
-      ),
+      chapter: _chapter!,
+      settings: _settings,
+      ink: _ink,
     );
   }
 
-  Widget _bottomBar(ThemeData theme) {
-    final bool canPrev = _index > 1;
-    final String percent = '${(_progress * 100).round()}%';
-
-    return ClipRect(
-      // Thanh điều khiển bán trong suốt: mờ nhẹ nội dung phía sau (C7)
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Container(
-          decoration: BoxDecoration(
-            color: _background.withValues(alpha: 0.82),
-            border: Border(
-              top: BorderSide(color: _mutedInk.withValues(alpha: 0.25)),
-            ),
-          ),
-          padding: EdgeInsets.fromLTRB(
-            8,
-            6,
-            8,
-            6 + MediaQuery.of(context).padding.bottom,
-          ),
-          child: Row(
-            children: [
-              IconButton(
-                onPressed: canPrev ? () => _goTo(_index - 1) : null,
-                icon: const Icon(Icons.chevron_left_rounded),
-                color: _ink,
-                disabledColor: _mutedInk,
-                tooltip: 'Chương trước',
-              ),
-              Expanded(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Chương $_index',
-                      style: theme.textTheme.labelMedium?.copyWith(color: _ink),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      percent,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: _mutedInk,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              IconButton(
-                onPressed: () => _goTo(_index + 1),
-                icon: const Icon(Icons.chevron_right_rounded),
-                color: _ink,
-                disabledColor: _mutedInk,
-                tooltip: 'Chương sau',
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }

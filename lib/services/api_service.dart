@@ -125,6 +125,7 @@ abstract class ApiService {
     String status = 'ongoing',
     List<String> genres = const <String>[],
     bool isDraft = false,
+    String? originalAuthor,
   });
 
   /// PUT /stories/{id} — sửa truyện; trường truyền `null` thì giữ nguyên,
@@ -137,6 +138,7 @@ abstract class ApiService {
     String? status,
     List<String>? genres,
     bool? isDraft,
+    String? originalAuthor,
   });
 
   /// DELETE /stories/{id} — xoá truyện (chỉ tác giả).
@@ -590,6 +592,7 @@ class HttpApiService implements ApiService {
     String status = 'ongoing',
     List<String> genres = const <String>[],
     bool isDraft = false,
+    String? originalAuthor,
   }) async {
     final dynamic data = await _request(
       'POST',
@@ -599,6 +602,8 @@ class HttpApiService implements ApiService {
         if (_cleanField(description) != null)
           'description': _cleanField(description),
         if (_cleanField(coverUrl) != null) 'coverUrl': _cleanField(coverUrl),
+        if (_cleanField(originalAuthor) != null)
+          'originalAuthor': _cleanField(originalAuthor),
         'status': status,
         'genres': genres,
         'isDraft': isDraft,
@@ -616,6 +621,7 @@ class HttpApiService implements ApiService {
     String? status,
     List<String>? genres,
     bool? isDraft,
+    String? originalAuthor,
   }) async {
     final dynamic data = await _request(
       'PUT',
@@ -625,6 +631,9 @@ class HttpApiService implements ApiService {
         // Kèm key + null để backend xoá trường (exclude_unset của Pydantic).
         if (description != null) 'description': _cleanField(description),
         if (coverUrl != null) 'coverUrl': _cleanField(coverUrl),
+        // Chuỗi rỗng → null = xoá tác giả (lưu NULL).
+        if (originalAuthor != null)
+          'originalAuthor': _cleanField(originalAuthor),
         'status': ?status,
         'genres': ?genres,
         'isDraft': ?isDraft,

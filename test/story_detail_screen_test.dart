@@ -27,6 +27,8 @@ void main() {
     title: 'Kiếm Sư Vọng Tường',
     author: 'Trần Nhật Nam',
     authorId: 1,
+    originalAuthor: 'Trần Nhật Nam',
+    uploaderName: 'ZTE',
     coverUrl: null,
     description: 'Một thiếu niên đói nghèo ở biên cương vô tình thức tỉnh kiếm ý vạn năm.',
     genres: const <String>['Tiên Hiệp', 'Kiếm Hiệp'],
@@ -58,7 +60,10 @@ void main() {
 
     // Thông tin (A3.4)
     expect(find.text('Kiếm Sư Vọng Tường'), findsOneWidget);
-    expect(find.text('Trần Nhật Nam'), findsOneWidget);
+    // Hai dòng tách bạch: Tác giả (nguyên tác) + Người đăng.
+    expect(find.text('Tác giả: Trần Nhật Nam', findRichText: true),
+        findsOneWidget);
+    expect(find.text('Người đăng: ZTE', findRichText: true), findsOneWidget);
     expect(find.text('Tiên Hiệp'), findsWidgets);
     expect(find.text('4.5'), findsOneWidget); // điểm
     expect(find.text('Đang ra'), findsOneWidget); // trạng thái

@@ -136,7 +136,10 @@ static const bool useMock = false;   // false = API thật (mặc định từ B
 
 ### Màn chi tiết truyện (`lib/screens/story_detail_screen.dart`)
 
-- Bìa, tên, tác giả, chip thể loại, điểm, số chương, trạng thái ("Đang ra"/"Hoàn thành").
+- Bìa, tên, hai dòng thông tin tách bạch: **"Tác giả: …"** (tác giả nguyên tác,
+  chưa rõ thì "Chưa rõ") và **"Người đăng: …"** (tài khoản VietRead đăng/nhập
+  truyện) — widget dùng chung [`lib/widgets/story_credits.dart`](lib/widgets/story_credits.dart);
+  chip thể loại, điểm, số chương, trạng thái ("Đang ra"/"Hoàn thành").
 - Nút **Đọc** / **Đọc tiếp** (nếu đã từng đọc truyện này), **Theo dõi**, **Tải offline**
   (2 nút sau hoạt động thật từ Bước 7 — xem mục 6).
 - Mô tả có nút **Xem thêm** / **Thu gọn**.
@@ -233,7 +236,10 @@ Tay trên emulator (`flutter run`, backend đang chạy; `API_BASE_URL` mặc đ
 ### SQLite cục bộ (A4)
 
 [`lib/services/db_helper.dart`](lib/services/db_helper.dart) tạo đúng 3 bảng theo A4:
-`downloaded_stories(id, title, author, coverPath, description)`,
+`downloaded_stories(id, title, author, originalAuthor, uploaderName, coverPath,
+description)` (**db version 2** — `onUpgrade` thêm 2 cột `originalAuthor`/
+`uploaderName` bằng `ALTER TABLE ADD COLUMN`, giữ nguyên dữ liệu đã tải; bản
+tải trước nâng cấp đọc được, hiện "Chưa rõ" cho tới khi tải lại),
 `downloaded_chapters(id, storyId, idx, title, content)` và
 `reading_history(storyId, chapterIndex, chapterTitle, progress, updatedAt)`.
 Mỗi lần app lưu tiến độ đọc (Bước 5) song song ghi thêm 1 dòng vào `reading_history`.
@@ -362,7 +368,9 @@ Tay trên emulator (`flutter run`, backend đang chạy):
   **Sửa thông tin / Quản lý chương / Đăng công khai (hoặc Chuyển về nháp) / Xoá truyện**
   (xoá có dialog xác nhận → snackbar).
 - [`lib/screens/story_form_screen.dart`](lib/screens/story_form_screen.dart) — tạo/sửa
-  truyện: tên*, mô tả, ảnh bìa (URL), trạng thái (Đang ra / Hoàn thành), chip thể loại
+  truyện: tên*, mô tả, ảnh bìa (URL), ô **"Tác giả (nguyên tác)"** (không bắt buộc,
+  ≤ 200 ký tự, có gợi ý + nút **"Dùng tên tài khoản của tôi"**; truyện nhập từ link
+  điền sẵn từ nguồn, vẫn sửa được), trạng thái (Đang ra / Hoàn thành), chip thể loại
   (chọn từ server hoặc nhập tay), công tắc **Lưu làm nháp**; lưu xong pop `Story` về.
 - [`lib/screens/chapter_manager_screen.dart`](lib/screens/chapter_manager_screen.dart) —
   header truyện + danh sách chương (phân trang 200), thêm/sửa/xoá chương có dialog xác

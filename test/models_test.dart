@@ -108,6 +108,48 @@ void main() {
       expect(done.statusLabel, 'Hoàn thành');
     });
 
+    test('JSON cũ (chỉ author) vẫn đọc được: uploaderName fallback, tác giả null', () {
+      // Bản backend trước khi tách 2 khái niệm — không có 2 trường mới.
+      final Story old = Story.fromJson(<String, dynamic>{
+        'id': 9,
+        'title': 'Truyện Cũ',
+        'author': 'ZTE',
+        'authorId': 2,
+        'updatedAt': '2026-10-06T10:47:48.657115',
+      });
+      expect(old.originalAuthor, isNull); // chưa rõ tác giả → hiện "Chưa rõ"
+      expect(old.uploaderName, 'ZTE'); // fallback = author cũ
+      expect(old.author, 'ZTE');
+    });
+
+    test('JSON mới đủ 3 trường: originalAuthor, uploaderName, author tương thích', () {
+      final Story neu = Story.fromJson(<String, dynamic>{
+        'id': 10,
+        'title': 'Nhập Từ Qidian',
+        'author': 'Băng Tụy Trà', // tương thích = originalAuthor khi có
+        'authorId': 5,
+        'originalAuthor': 'Băng Tụy Trà',
+        'uploaderName': 'ZTE',
+        'updatedAt': '2026-10-06T10:47:48.657115',
+      });
+      expect(neu.originalAuthor, 'Băng Tụy Trà');
+      expect(neu.uploaderName, 'ZTE');
+      expect(neu.author, 'Băng Tụy Trà');
+
+      // originalAuthor rỗng/khoảng trắng từ server → null
+      final Story blank = Story.fromJson(<String, dynamic>{
+        'id': 11,
+        'title': 'x',
+        'author': 'ZTE',
+        'authorId': 2,
+        'originalAuthor': '   ',
+        'uploaderName': ' ZTE ',
+        'updatedAt': '2026-10-06T10:47:48.657115',
+      });
+      expect(blank.originalAuthor, isNull);
+      expect(blank.uploaderName, 'ZTE'); // trim
+    });
+
     test('toJson → fromJson giữ nguyên dữ liệu (round-trip)', () {
       final Story story = Story.fromJson(decode(storyJson));
       final Map<String, dynamic> roundTrip = Story.fromJson(story.toJson())

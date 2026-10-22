@@ -36,8 +36,26 @@ from .scraper import (
     qidian_chapter_id,
 )
 from .translator import translate_text
+from ..vietphrase import convert_name
 
 logger = logging.getLogger("vietread.imports")
+
+
+def original_author_fields(parsed_author: str | None) -> tuple[str | None, str | None]:
+    """(OriginalAuthor, OriginalAuthorRaw) từ tên tác giả đọc được ở nguồn.
+
+    - Raw = tên gốc (chữ Trung) — lưu nguyên không sửa.
+    - OriginalAuthor = bản Hán-Việt viết hoa từng từ ([convert_name], offline
+      từ điển). Tên không phải chữ Trung (vd Latin) → giữ nguyên làm hiển thị.
+    - Không lấy được / không chuyển được → cả hai `None` (job vẫn Done).
+    """
+    raw = (parsed_author or "").strip()
+    if not raw:
+        return None, None
+    vi = convert_name(raw)
+    if vi is None and not any("\u3400" <= ch <= "\u9fff" for ch in raw):
+        vi = raw  # không có chữ Hán → tên đã đọc được, dùng thẳng
+    return vi, raw
 
 def _utc_now() -> datetime:
     """Thời gian UTC naive — khớp DATETIME2 (SYSUTCDATETIME) như các router khác."""
@@ -112,6 +130,7 @@ def run_import_job(job_id: int) -> None:
             if parsed.description
             else None
         )
+        author_vi, author_raw = original_author_fields(parsed.author)
         story = Story(
             author_id=job.user_id,
             title=title,
@@ -119,6 +138,8 @@ def run_import_job(job_id: int) -> None:
             cover_url=parsed.cover_url,
             status="ongoing",
             is_draft=True,
+            original_author=author_vi,
+            original_author_raw=author_raw,
             source_url=job.source_url,
             # bookId từ URL truyện (Qidian) — NULL với nguồn khác / URL lạ;
             # dùng để chống nhầm truyện khi thêm chương bằng link về sau.

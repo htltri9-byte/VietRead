@@ -206,8 +206,8 @@ Ngoài ra có thể test trực tiếp trên http://127.0.0.1:8000/docs (nhấn 
 | GET | `/stories` | `query, genre, status, sort, page, pageSize` | mảng `[Story]`, chỉ truyện đã đăng |
 | GET | `/me/stories` | – | truyện của mình **kể cả nháp**, mới nhất trước; cần token (thêm ở Bước 9) |
 | GET | `/stories/{id}` | – | `Story`; truyện nháp chỉ chủ nhân xem được (khách → 404) |
-| POST | `/stories` | `{ title, description?, coverUrl?, status?, genres[], isDraft? }` | cần token; `genres` là **tên thể loại**, chưa có sẽ tự tạo |
-| PUT | `/stories/{id}` | trường nào gửi lên thì trường đó sửa | chỉ tác giả (khác → 403) |
+| POST | `/stories` | `{ title, description?, coverUrl?, status?, genres[], isDraft?, originalAuthor? }` | cần token; `genres` là **tên thể loại**, chưa có sẽ tự tạo; `originalAuthor` = tác giả nguyên tác (≤ 200 ký tự, rỗng → NULL) |
+| PUT | `/stories/{id}` | trường nào gửi lên thì trường đó sửa | chỉ tác giả (khác → 403); gửi `originalAuthor` rỗng (`""`) để xoá tác giả |
 | DELETE | `/stories/{id}` | – | chỉ tác giả; DB tự xoá chương/bình luận/follows/thể loại |
 | GET | `/stories/{id}/chapters` | `page, pageSize` | `[ChapterSummary]` (không kèm content) |
 | POST | `/stories/{id}/chapters` | `{ title, content, index? }` | bỏ `index` → tự đánh số tiếp; trùng index → 400 |
@@ -221,17 +221,41 @@ Ngoài ra có thể test trực tiếp trên http://127.0.0.1:8000/docs (nhấn 
 
 - `status`: `ongoing` (đang ra) \| `completed` (hoàn thành) — sai → 400.
 - `sort`: `newest` (mới, mặc định) \| `hot` (nhiều theo dõi) \| `rating` (điểm) \| `title` — sai → 400. Nhận cả `mới`, `điểm`.
-- `query` tìm theo **tên truyện hoặc tên tác giả**; `genre` lọc theo tên thể loại.
+- `query` tìm theo **tên truyện, tên tác giả (nguyên tác) hoặc tên người đăng**
+  (không mất kết quả cũ — trước đây tìm theo tên người đăng qua `Users`);
+  `genre` lọc theo tên thể loại.
 - `pageSize` mặc định 12 (truyện) / 50 (chương), tối đa 100 / 200.
-- Model `Story` trả về: `{ id, title, author, authorId, coverUrl, description, genres[], status, rating, chapterCount, isDraft, updatedAt }` — `genres` là mảng tên thể loại; `authorId` + `isDraft` là trường thêm ngoài Phần B, phục vụ Bước 9/10.
+- Model `Story` trả về: `{ id, title, author, authorId, originalAuthor, uploaderName,
+  coverUrl, description, genres[], status, rating, chapterCount, isDraft, updatedAt }`
+  — `genres` là mảng tên thể loại; `authorId` + `isDraft` là trường thêm ngoài Phần B,
+  phục vụ Bước 9/10.
+- **TÁC GIẢ vs NGƯỜI ĐĂNG** (tách bạch 2 khái niệm):
+  - `originalAuthor` — tác giả nguyên tác (người sáng tác truyện gốc; với truyện
+    nhập từ Qidian là tác giả trên Qidian). `NULL` = chưa rõ → client hiện
+    "Chưa rõ". Trữ trong cột `Stories.OriginalAuthor` (+ `OriginalAuthorRaw`
+    giữ tên gốc chữ Trung khi đọc được từ nguồn).
+  - `uploaderName` — tên hiển thị người đăng (tài khoản VietRead) — luôn join
+    từ `Users`, không lưu trùng vào `Stories`.
+  - `author` — **TRƯỜNG TƯƠNG THÍCH** cho bản Flutter cũ: bằng `originalAuthor`
+    nếu có, không thì bằng `uploaderName`. Sẽ bỏ sau khi client cũ không còn
+    dùng — Flutter mới dùng 2 trường phía trên, không đọc `author`.
+  - Migration idempotent (đã chạy, không mất dữ liệu cũ — truyện cũ để
+    `OriginalAuthor = NULL`):
+    `sqlcmd -S localhost -E -C -b -f 65001 -i database/migrate_original_author.sql`
+    (chạy lại vô hại; in số truyện còn NULL).
 - **Bước 10 (nhập truyện từ link)**: worker nằm ở `app/services/` — `scraper.py`
   (adapter theo domain: Qidian + nguồn demo
   `demo.vietread.local` fixture không cần mạng), `translator.py` (dịch theo đoạn,
   chuỗi endpoint dự phòng — endpoint lỗi ≥2 lần tự tạm nghỉ rồi tự quay lại
   (5 phút với lỗi thường, hết quota thì nghỉ tới đúng lúc API báo hồi — tối đa
   12 giờ; không cần restart); lỗi dịch luôn nêu rõ tên endpoint + lý do +
-  thời điểm hồi quota), `import_worker.py` (Pending → Running → Done/Failed,
-  truyện nhập là nháp IsDraft=1). Cấu hình trong `.env`: `TRANSLATE_MODE`
+  thời điểm hồi quota),  `import_worker.py` (Pending → Running → Done/Failed,
+  truyện nhập là nháp IsDraft=1). Khi nhập cả bộ, worker đọc tên tác giả từ
+  trang truyện (`parse_story`) rồi lưu `OriginalAuthorRaw` = tên gốc chữ Trung,
+  `OriginalAuthor` = bản chuyển Hán-Việt viết hoa từng từ bằng từ điển offline
+  (`convert_name`, `names.txt`/`hanviet.txt` — không dịch bằng dịch vụ online);
+  không lấy được thì để NULL và job vẫn Done. Nguồn demo dùng fixture có sẵn
+  (`演示作者` → `Diễn Kì Tác Người`). Cấu hình trong `.env`: `TRANSLATE_MODE`
   (`dict` mặc định = dịch offline bằng từ điển `app/vietphrase.py` +
   `dictionaries/` — kèm `vietphrase.txt` 679k cụm từ, `luatnhan.txt` 7.024
   mẫu `{0}` (Luật Nhân), `surnames.txt` 400 họ — không cần mạng/key; tiêu đề

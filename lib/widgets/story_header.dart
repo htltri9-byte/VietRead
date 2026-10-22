@@ -4,6 +4,7 @@ import '../models/story.dart';
 import '../theme/app_theme.dart';
 import 'chip_genre.dart';
 import 'story_card.dart';
+import 'story_credits.dart';
 
 /// Khối "bìa + thông tin" trên cùng của màn chi tiết truyện:
 /// ảnh bìa, tên, tác giả, thể loại, điểm, số chương, trạng thái.
@@ -32,12 +33,8 @@ class StoryHeader extends StatelessWidget {
             children: [
               Text(story.title, style: theme.textTheme.titleLarge),
               const SizedBox(height: 6),
-              Text(
-                story.author,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
+              // Hai dòng riêng: Tác giả (nguyên tác) và Người đăng.
+              StoryCredits(story: story),
               const SizedBox(height: 10),
               Wrap(
                 spacing: 6,

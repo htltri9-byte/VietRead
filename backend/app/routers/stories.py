@@ -79,11 +79,15 @@ def get_owned_story(db: Session, story_id: int, user: User) -> Story:
 
 
 def story_outs(db: Session, stories: list[Story]) -> list[StoryOut]:
-    """Ghép truyện với tên tác giả, danh sách thể loại, số chương (không N+1)."""
+    """Ghép truyện với tên người đăng, tác giả gốc, thể loại, số chương (không N+1).
+
+    `authorId`/`Users` join = NGƯỜI ĐĂNG; `OriginalAuthor` = TÁC GIẢ nguyên tác.
+    `author` (tương thích) = originalAuthor hoặc fallback uploaderName.
+    """
     if not stories:
         return []
     ids = [s.id for s in stories]
-    authors = dict(
+    uploaders = dict(
         db.execute(select(User.id, User.name).where(User.id.in_({s.author_id for s in stories}))).all()
     )
     genre_rows = db.execute(
@@ -106,8 +110,12 @@ def story_outs(db: Session, stories: list[Story]) -> list[StoryOut]:
         StoryOut(
             id=s.id,
             title=s.title,
-            author=authors.get(s.author_id, ""),
+            # TRƯỜNG TƯƠNG THÍCH cho bản Flutter cũ: tác giả gốc nếu có,
+            # không thì tên người đăng (đúng nghĩa trước đây của `author`).
+            author=(s.original_author or uploaders.get(s.author_id, "")),
             authorId=s.author_id,
+            originalAuthor=s.original_author,
+            uploaderName=uploaders.get(s.author_id, ""),
             coverUrl=s.cover_url,
             description=s.description,
             genres=genres.get(s.id, []),
@@ -148,8 +156,14 @@ def list_stories(
 
     if query and query.strip():
         pattern = f"%{query.strip()}%"
-        stmt = stmt.join(User, User.id == Story.author_id).where(
-            or_(Story.title.ilike(pattern), User.name.ilike(pattern))
+        # Tìm theo tên truyện, tên tác giả nguyên tác HOẶC tên người đăng
+        # (không mất kết quả cũ — trước đây tìm theo tên người đăng qua Users).
+        stmt = stmt.outerjoin(User, User.id == Story.author_id).where(
+            or_(
+                Story.title.ilike(pattern),
+                Story.original_author.ilike(pattern),
+                User.name.ilike(pattern),
+            )
         )
 
     if genre and genre.strip():
@@ -219,7 +233,7 @@ def create_story(
     db: Session = Depends(get_db),
     user: User = Depends(security.get_current_user),
 ) -> StoryOut:
-    """Tạo truyện mới (tác giả là người đang đăng nhập)."""
+    """Tạo truyện mới (người đăng là người đang đăng nhập; tác giả gốc tuỳ chọn)."""
     story = Story(
         author_id=user.id,
         title=payload.title,
@@ -227,6 +241,7 @@ def create_story(
         cover_url=payload.cover_url,
         status=payload.status,
         is_draft=payload.is_draft,
+        original_author=payload.original_author,
     )
     db.add(story)
     db.flush()
@@ -258,6 +273,9 @@ def update_story(
         story.description = payload.description
     if "cover_url" in data:
         story.cover_url = payload.cover_url
+    if "original_author" in data:
+        # None/rỗng → xoá tác giả (NULL); chuỗi bình thường → lưu đã trim
+        story.original_author = payload.original_author
     if "status" in data:
         if payload.status not in _STATUSES:
             raise HTTPException(status_code=400, detail="Trạng thái phải là 'ongoing' hoặc 'completed'")

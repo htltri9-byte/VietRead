@@ -1,4 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
+import 'package:sqflite/sqflite.dart';
 import 'package:vietread/models/chapter.dart';
 import 'package:vietread/models/downloaded_story.dart';
 import 'package:vietread/models/reading_progress.dart';
@@ -142,6 +144,102 @@ void main() {
       await db.deleteHistory(1);
       final List<HistoryEntry> rows = await db.history();
       expect(rows.map((HistoryEntry r) => r.storyId).toList(), <int>[2]);
+    });
+  });
+
+  group('nâng cấp SQLite v1 → v2 (thêm cột, giữ dữ liệu đã tải)', () {
+    test('onUpgrade ALTER TABLE: truyện/chương cũ vẫn đọc được', () async {
+      final String path = p.join(
+        await databaseFactory.getDatabasesPath(),
+        'vietread_v1_upgrade_test.db',
+      );
+      await databaseFactory.deleteDatabase(path);
+
+      // Đúng schema v1 — TRƯỚC KHI thêm originalAuthor/uploaderName.
+      final Database v1 = await openDatabase(
+        path,
+        version: 1,
+        onCreate: (Database db, int version) async {
+          await db.execute('''
+            CREATE TABLE downloaded_stories(
+              id INTEGER PRIMARY KEY,
+              title TEXT NOT NULL,
+              author TEXT NOT NULL DEFAULT '',
+              coverPath TEXT,
+              description TEXT
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE downloaded_chapters(
+              id INTEGER PRIMARY KEY,
+              storyId INTEGER NOT NULL,
+              idx INTEGER NOT NULL,
+              title TEXT NOT NULL,
+              content TEXT NOT NULL,
+              UNIQUE(storyId, idx)
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE reading_history(
+              storyId INTEGER PRIMARY KEY,
+              chapterIndex INTEGER NOT NULL,
+              chapterTitle TEXT NOT NULL,
+              progress REAL NOT NULL,
+              updatedAt TEXT NOT NULL
+            )
+          ''');
+          await db.insert('downloaded_stories', <String, Object?>{
+            'id': 7,
+            'title': 'Bảy Ngày Trước Bình Minh',
+            'author': 'Tên Cũ',
+          });
+          await db.insert('downloaded_chapters', <String, Object?>{
+            'id': 7001,
+            'storyId': 7,
+            'idx': 1,
+            'title': 'Chương 1',
+            'content': 'Nội dung đã tải trước nâng cấp.',
+          });
+        },
+      );
+      await v1.close();
+
+      // Mở lại bằng DbHelper (v2) → onUpgrade chạy ALTER TABLE ADD COLUMN.
+      DbHelper.resetForTest(path: path);
+      final DbHelper db = DbHelper.instance;
+
+      final DownloadedStory upgraded =
+          (await db.downloadedStories()).single;
+      expect(upgraded.id, 7);
+      expect(upgraded.title, 'Bảy Ngày Trước Bình Minh');
+      expect(upgraded.author, 'Tên Cũ'); // cột cũ giữ nguyên
+      // Cột mới trên db cũ → NULL: hiện "Chưa rõ" tới khi tải lại/làm mới.
+      expect(upgraded.originalAuthor, isNull);
+      expect(upgraded.uploaderName, isNull);
+      expect(upgraded.toStory().originalAuthor, isNull);
+      // Chương + nội dung đọc offline vẫn nguyên vẹn.
+      expect(await db.downloadedChapterCount(7), 1);
+      final Chapter? c1 = await db.downloadedChapter(7, 1);
+      expect(c1!.content, contains('trước nâng cấp'));
+
+      // Ghi được vào cột mới sau nâng cấp (khi tải lại/làm mới).
+      await db.upsertDownloadedStory(
+        DownloadedStory(
+          id: 7,
+          title: 'Bảy Ngày Trước Bình Minh',
+          author: 'Tên Cũ',
+          originalAuthor: 'Nguyễn Hải Đăng',
+          uploaderName: 'ZTE',
+        ),
+      );
+      final DownloadedStory rewritten =
+          (await db.downloadedStories()).single;
+      expect(rewritten.originalAuthor, 'Nguyễn Hải Đăng');
+      expect(rewritten.uploaderName, 'ZTE');
+      expect(await db.downloadedChapterCount(7), 1); // chương không mất
+
+      await db.close();
+      await databaseFactory.deleteDatabase(path);
     });
   });
 }

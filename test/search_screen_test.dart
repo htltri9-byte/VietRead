@@ -205,7 +205,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(StoryDetailScreen), findsOneWidget);
-    expect(find.text('Trần Nhật Nam'), findsOneWidget);
+    expect(find.text('Tác giả: Trần Nhật Nam', findRichText: true),
+        findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

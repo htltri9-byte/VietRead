@@ -702,6 +702,52 @@ def convert_lines(
     ]
 
 
+
+def convert_name(name: str) -> str | None:
+    """Tên người (chữ Trung) → Hán-Việt viết hoa từng từ — CHỈ tra từ điển
+    offline, không gọi dịch vụ online.
+
+    Thứ tự tra: `names.txt` (nếu trúng cụm) → Hán-Việt từng chữ
+    (`hanviet.txt`) — KHÔNG dùng VietPhrase/Luật Nhân vì đó là cụm phổ thông,
+    không dành cho tên riêng (vd 猫腻 sẽ ra "Chuyện ẩn…" thay vì Mao Nị).
+
+    Trả `None` khi không đủ dữ kiện để chuyển (không có chữ Hán nào, hoặc
+    một chữ không tra được âm ở bất kỳ đâu) — caller giữ OriginalAuthor = NULL
+    thay vì lưu tên lộn xộn.
+    """
+    raw = (name or "").strip()
+    if not raw:
+        return None
+    load()
+    # Trúng names.txt (đã viết hoa sẵn theo chuẩn từ điển) → dùng luôn
+    hit = _names.get(raw)
+    if hit:
+        return _capitalize_words(hit)
+    # Không có chữ Hán nào → không phải tên Trung, để caller tự quyết định
+    if not any(_is_han(ch) for ch in raw):
+        return None
+    parts: list[str] = []
+    for ch in raw:
+        if not _is_han(ch):
+            if not ch.isspace():
+                parts.append(ch)  # giữ ký tự Latin xen giữa (vd "J.")
+            continue
+        # Thứ tự tra 1 chữ: họ (surnames — đúng âm đọc tên) → Hán-Việt từng
+        # chữ → vietphrase (chỉ lấy khi 2 tầng trên thiếu — hanviet.txt sinh
+        # từ Unihan thiếu vài chữ phổ biến, vd 辰/肘; nghĩa đầu của vietphrase
+        # cho 1 chữ thường vẫn là âm Hán-Việt, vd 辰=thần). Vẫn offline 100%.
+        reading = (
+            _surnames.get(ch)
+            or _hanviet.get(ch)
+            or _vietphrase.get(ch)
+        )
+        if not reading:
+            return None  # không tra được âm chữ này → không đoán, trả None
+        parts.append(reading.split("/")[0].split(";")[0].strip())  # âm đầu
+    result = _capitalize_words(" ".join(p for p in parts if p).strip())
+    return result or None
+
+
 def _plan_multi(chunks: list[list[_Piece]], ctx: MarkContext | None) -> list[dict[int, str]]:
     """Quyết định mỗi token xuất gì: marker (đã lọc + chấm điểm), nghĩa đã
     chọn, hoặc nghĩa đầu (không có entry).

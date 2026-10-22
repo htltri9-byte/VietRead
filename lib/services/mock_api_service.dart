@@ -57,6 +57,7 @@ class MockApiService implements ApiService {
       title: 'Kiếm Sư Vọng Tường',
       author: 'Trần Nhật Nam',
       authorId: 1,
+      originalAuthor: 'Trần Nhật Nam',
       genres: <String>['Tiên Hiệp', 'Kiếm Hiệp'],
       status: 'ongoing',
       rating: 4.5,
@@ -70,6 +71,7 @@ class MockApiService implements ApiService {
       title: 'Hoàng Đạo Chi Tâm',
       author: 'Trần Nhật Nam',
       authorId: 1,
+      originalAuthor: 'Trần Nhật Nam',
       genres: <String>['Huyền Huyễn', 'Trinh Thám'],
       status: 'ongoing',
       rating: 4.8,
@@ -83,6 +85,7 @@ class MockApiService implements ApiService {
       title: 'Phố Đèn Neon',
       author: 'Trần Nhật Nam',
       authorId: 1,
+      originalAuthor: 'Trần Nhật Nam',
       genres: <String>['Đô Thị', 'Ngôn Tình'],
       status: 'completed',
       rating: 4.2,
@@ -96,6 +99,7 @@ class MockApiService implements ApiService {
       title: 'Xuyên Không Làm Giàu Ở Tống Triều',
       author: 'Trần Nhật Nam',
       authorId: 1,
+      originalAuthor: 'Trần Nhật Nam',
       genres: <String>['Xuyên Không', 'Hệ Thống'],
       status: 'ongoing',
       rating: 4.1,
@@ -109,6 +113,7 @@ class MockApiService implements ApiService {
       title: 'Hệ Thống Treo Dọc Đêm',
       author: 'Lâm Gia Huy',
       authorId: 3,
+      originalAuthor: 'Lâm Gia Huy',
       genres: <String>['Hệ Thống', 'Đô Thị'],
       status: 'ongoing',
       rating: 4.4,
@@ -122,6 +127,7 @@ class MockApiService implements ApiService {
       title: 'Mèo Đen Của Tiệm Sách Cũ',
       author: 'Vũ Thanh Hà',
       authorId: 4,
+      originalAuthor: 'Vũ Thanh Hà',
       genres: <String>['Ngôn Tình', 'Đô Thị'],
       status: 'completed',
       rating: 4.6,
@@ -135,6 +141,7 @@ class MockApiService implements ApiService {
       title: 'Bảy Ngày Trước Bình Minh',
       author: 'Nguyễn Hải Đăng',
       authorId: 5,
+      originalAuthor: 'Nguyễn Hải Đăng',
       genres: <String>['Trinh Thám'],
       status: 'ongoing',
       rating: 4.7,
@@ -148,6 +155,7 @@ class MockApiService implements ApiService {
       title: 'Lôi Đài Cuối Đời',
       author: 'Lâm Gia Huy',
       authorId: 3,
+      originalAuthor: 'Lâm Gia Huy',
       genres: <String>['Kiếm Hiệp', 'Tiên Hiệp'],
       status: 'completed',
       rating: 3.9,
@@ -177,8 +185,14 @@ class MockApiService implements ApiService {
   Story _toStory(_MockStory mock) => Story(
     id: mock.id,
     title: mock.title,
-    author: mock.author,
+    // Trường tương thích `author`: originalAuthor nếu có, không thì người đăng
+    // (đúng cách backend mới tính — bản Flutter cũ không vỡ).
+    author: (mock.originalAuthor ?? '').isNotEmpty
+        ? mock.originalAuthor!
+        : mock.author,
     authorId: mock.authorId,
+    originalAuthor: mock.originalAuthor,
+    uploaderName: mock.author,
     // Ảnh bìa người dùng nhập luôn thắng ảnh picsum ngẫu nhiên.
     coverUrl:
         mock.coverUrl ??
@@ -219,7 +233,10 @@ class MockApiService implements ApiService {
       result = result.where(
         (_MockStory s) =>
             s.title.toLowerCase().contains(q) ||
-            s.author.toLowerCase().contains(q),
+            s.author.toLowerCase().contains(q) ||
+            // Tìm kiếm theo TÁC GIẢ (nguyên tác) — không mất kết quả theo
+            // tên người đăng ở trên.
+            (s.originalAuthor ?? '').toLowerCase().contains(q),
       );
     }
     final String g = (genre ?? '').trim();
@@ -706,6 +723,7 @@ class MockApiService implements ApiService {
         title: 'Đường Qingyun',
         author: user.name,
         authorId: user.id,
+        originalAuthor: 'Diễn Kì Tác Người',
         genres: const <String>['Tiên Hiệp'],
         status: 'ongoing',
         rating: 0,
@@ -800,6 +818,7 @@ class MockApiService implements ApiService {
     String status = 'ongoing',
     List<String> genres = const <String>[],
     bool isDraft = false,
+    String? originalAuthor,
   }) async {
     await _wait();
     final User me = _requireLogin();
@@ -821,6 +840,7 @@ class MockApiService implements ApiService {
       title: cleanTitle,
       author: me.name,
       authorId: me.id,
+      originalAuthor: _nullIfEmpty(originalAuthor),
       genres: _cleanGenres(genres),
       status: status,
       rating: 0,
@@ -844,6 +864,7 @@ class MockApiService implements ApiService {
     String? status,
     List<String>? genres,
     bool? isDraft,
+    String? originalAuthor,
   }) async {
     await _wait();
     final _MockStory mock = _storyOrThrow(storyId);
@@ -860,6 +881,10 @@ class MockApiService implements ApiService {
     }
     if (description != null) mock.description = _nullIfEmpty(description);
     if (coverUrl != null) mock.coverUrl = _nullIfEmpty(coverUrl);
+    // null = không gửi trường này (giữ nguyên); '' = xoá (lưu NULL).
+    if (originalAuthor != null) {
+      mock.originalAuthor = _nullIfEmpty(originalAuthor);
+    }
     if (status != null) {
       if (status != 'ongoing' && status != 'completed') {
         throw const ApiException(
@@ -1846,13 +1871,19 @@ class _MockStory {
     required this.hot,
     required this.description,
     this.coverUrl,
+    this.originalAuthor,
     this.isDraft = false,
   });
 
   final int id;
   String title;
+
+  /// Người đăng (tài khoản VietRead) — giữ tên `author` như bản mock cũ.
   final String author;
   final int authorId;
+
+  /// Tác giả nguyên tác (null = chưa rõ — hiện "Chưa rõ" trên thẻ).
+  String? originalAuthor;
   List<String> genres;
   String status;
   final double rating;

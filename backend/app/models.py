@@ -67,6 +67,15 @@ class Story(Base):
     source_book_id: Mapped[str | None] = mapped_column(
         "SourceBookId", Unicode(100), nullable=True
     )
+    # TÁC GIẢ nguyên tác — tên hiển thị (Hán-Việt/ghi tay); NULL = chưa rõ.
+    # Khác AuthorId: AuthorId là NGƯỜI ĐĂNG (tài khoản VietRead).
+    original_author: Mapped[str | None] = mapped_column(
+        "OriginalAuthor", Unicode(200), nullable=True
+    )
+    # Tên gốc chữ Trung của tác giả (lấy được từ nguồn, vd Qidian)
+    original_author_raw: Mapped[str | None] = mapped_column(
+        "OriginalAuthorRaw", Unicode(200), nullable=True
+    )
     is_draft: Mapped[bool] = mapped_column("IsDraft", Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         "CreatedAt", DateTime, nullable=False, server_default=_utc_now_db()

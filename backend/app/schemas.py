@@ -102,6 +102,19 @@ class StoryFields(BaseModel):
             raise ValueError("Tên truyện không được để trống")
         return value
 
+    @field_validator("original_author", check_fields=False)
+    @classmethod
+    def _check_original_author(cls, value: str | None) -> str | None:
+        """Tác giả nguyên tác: trim; rỗng → None (NULL trong DB); ≤ 200 ký tự."""
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            return None
+        if len(value) > 200:
+            raise ValueError("Tên tác giả tối đa 200 ký tự")
+        return value
+
     @field_validator("status", check_fields=False)
     @classmethod
     def _check_status(cls, value: str | None) -> str | None:
@@ -130,7 +143,8 @@ class StoryFields(BaseModel):
 
 
 class StoryCreate(StoryFields):
-    """POST /stories — { title, description?, coverUrl?, status?, genres?, isDraft? }."""
+    """POST /stories — { title, description?, coverUrl?, status?, genres?, isDraft?,
+    originalAuthor? }."""
 
     title: str = Field(min_length=1, max_length=255)
     description: str | None = None
@@ -138,6 +152,8 @@ class StoryCreate(StoryFields):
     status: str = "ongoing"
     genres: list[str] = Field(default_factory=list)
     is_draft: bool = Field(default=False, alias="isDraft")
+    # TÁC GIẢ nguyên tác (không bắt buộc) — khác authorId (= người đăng)
+    original_author: str | None = Field(default=None, alias="originalAuthor", max_length=200)
 
 
 class StoryUpdate(StoryFields):
@@ -149,10 +165,19 @@ class StoryUpdate(StoryFields):
     status: str | None = None
     genres: list[str] | None = None
     is_draft: bool | None = Field(default=None, alias="isDraft")
+    original_author: str | None = Field(default=None, alias="originalAuthor", max_length=200)
 
 
 class StoryOut(BaseModel):
-    """Model Story theo Phần B; thêm authorId + isDraft để phân quyền ở Bước 9/10."""
+    """Model Story theo Phần B; thêm authorId + isDraft để phân quyền ở Bước 9/10.
+
+    TÁC GIẢ vs NGƯỜI ĐĂNG (tách bạch từ bản cũ):
+    - `originalAuthor` — tác giả nguyên tác (có thể NULL = chưa rõ).
+    - `uploaderName` — tên hiển thị người đăng truyện (tài khoản VietRead).
+    - `author` — TRƯỜNG TƯƠNG THÍCH (bản Flutter cũ đọc trường này): bằng
+      `originalAuthor` nếu có, không thì bằng `uploaderName`. Sẽ bỏ sau khi
+      client cũ không còn dùng — Flutter mới dùng 2 trường trên.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -160,6 +185,8 @@ class StoryOut(BaseModel):
     title: str
     author: str
     author_id: int = Field(alias="authorId")
+    original_author: str | None = Field(default=None, alias="originalAuthor")
+    uploader_name: str = Field(default="", alias="uploaderName")
     cover_url: str | None = Field(default=None, alias="coverUrl")
     description: str | None = None
     genres: list[str] = Field(default_factory=list)

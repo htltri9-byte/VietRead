@@ -58,6 +58,10 @@ CREATE TABLE dbo.Stories (
     SourceUrl   NVARCHAR(1000) NULL,
     -- Mã truyện trên nguồn (vd: bookId Qidian) — chống nhầm chương khi thêm link
     SourceBookId NVARCHAR(100) NULL,
+    -- TÁC GIẢ (nguyên tác): tên hiển thị đã Hán-Việt/ghi tay; NULL = chưa rõ
+    OriginalAuthor    NVARCHAR(200) NULL,
+    -- Tên gốc chữ Trung của tác giả (nếu lấy được từ nguồn, vd Qidian)
+    OriginalAuthorRaw NVARCHAR(200) NULL,
     IsDraft     BIT            NOT NULL CONSTRAINT DF_Stories_IsDraft DEFAULT (0),
     CreatedAt   DATETIME2      NOT NULL CONSTRAINT DF_Stories_CreatedAt DEFAULT (SYSUTCDATETIME()),
     UpdatedAt   DATETIME2      NOT NULL CONSTRAINT DF_Stories_UpdatedAt DEFAULT (SYSUTCDATETIME()),

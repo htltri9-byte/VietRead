@@ -5,6 +5,8 @@ class Story {
     required this.title,
     required this.author,
     required this.authorId,
+    this.originalAuthor,
+    this.uploaderName,
     this.coverUrl,
     this.description,
     this.genres = const [],
@@ -17,8 +19,18 @@ class Story {
 
   final int id;
   final String title;
+  /// Tên hiển thị **tương thích** (bản cũ): nếu backend chưa trả
+  /// `originalAuthor` thì đây là tên người đăng; bản Flutter mới dùng
+  /// [originalAuthor] + [uploaderName] thay cho trường này.
   final String author;
   final int authorId;
+
+  /// Tác giả nguyên tác — người sáng tác truyện gốc.
+  /// `null` khi chưa rõ (ví dụ truyện nhập trước khi có cột này).
+  final String? originalAuthor;
+
+  /// Tên tài khoản VietRead đã đăng/nhập truyện lên app.
+  final String? uploaderName;
   final String? coverUrl;
   final String? description;
 
@@ -62,6 +74,12 @@ class Story {
     title: json['title'] as String? ?? '',
     author: json['author'] as String? ?? '',
     authorId: (json['authorId'] as num?)?.toInt() ?? 0,
+    // JSON cũ chỉ có `author` — khi đó originalAuthor để null (chưa rõ).
+    originalAuthor: _cleanNullable(json['originalAuthor'] as String?),
+    uploaderName: _cleanNullable(
+          json['uploaderName'] as String?,
+        ) ??
+        (json['author'] as String? ?? ''),
     coverUrl: json['coverUrl'] as String?,
     description: json['description'] as String?,
     genres: List<String>.from((json['genres'] as List?) ?? const <dynamic>[]),
@@ -80,6 +98,8 @@ class Story {
     'title': title,
     'author': author,
     'authorId': authorId,
+    'originalAuthor': originalAuthor,
+    'uploaderName': uploaderName,
     'coverUrl': coverUrl,
     'description': description,
     'genres': genres,
@@ -89,4 +109,10 @@ class Story {
     'isDraft': isDraft,
     'updatedAt': updatedAt.toIso8601String(),
   };
+
+  /// Chuỗi rỗng/khoảng trắng từ server → `null`.
+  static String? _cleanNullable(String? value) {
+    final String clean = (value ?? '').trim();
+    return clean.isEmpty ? null : clean;
+  }
 }

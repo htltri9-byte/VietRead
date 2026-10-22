@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vietread/models/chapter.dart';
 import 'package:vietread/models/genre.dart';
+import 'package:vietread/models/import_job.dart';
 import 'package:vietread/models/story.dart';
 import 'package:vietread/services/api_config.dart';
 import 'package:vietread/services/api_service.dart';
@@ -296,5 +297,91 @@ void main() {
         );
       },
     );
+  });
+
+  // ---------- Tác giả nguyên tác vs Người đăng (tách bạch 2 khái niệm) ----------
+
+  group('originalAuthor / uploaderName (mock)', () {
+    setUp(MockApiService.resetStoriesForTest);
+
+    test('seed đủ 2 trường mới; author tương thích = originalAuthor', () async {
+      final List<Story> stories = await api().fetchStories(pageSize: 100);
+      final Story s = stories.firstWhere((Story s) => s.id == 1);
+      expect(s.originalAuthor, 'Trần Nhật Nam');
+      expect(s.uploaderName, 'Trần Nhật Nam');
+      expect(s.author, 'Trần Nhật Nam');
+    });
+
+    test('truyện nhập mock có tác giả gốc từ nguồn (demo fixture)', () async {
+      final MockApiService mock = api();
+      await mock.login('tacgia@vietread.vn', 'VietRead@123');
+      final int jobId = await mock.startImport(
+        sourceUrl: 'https://demo.vietread.local/book/1',
+      );
+      ImportJob job = await mock.fetchImportJob(jobId);
+      for (int i = 0; i < 4 && job.status != 'Done' && job.status != 'Failed'; i++) {
+        await Future<void>.delayed(Duration.zero);
+        job = await mock.fetchImportJob(jobId);
+      }
+      expect(job.status, 'Done');
+      final Story imported = await mock.fetchStory(job.storyId!);
+      expect(imported.originalAuthor, 'Diễn Kì Tác Người');
+      // Người đăng = tài khoản vừa import (mock: tên lấy trước @).
+      expect(imported.uploaderName, 'tacgia');
+    });
+
+    test('tìm theo originalAuthor khác tên người đăng + vẫn tìm theo người đăng',
+        () async {
+      final MockApiService mock = api();
+      await mock.login('tacgia@vietread.vn', 'VietRead@123');
+      await mock.createStory(
+        title: 'Truyện Có Tác Giả',
+        originalAuthor: 'Hàn Mặc Kiếm',
+      );
+
+      final List<Story> byAuthor = await mock.fetchStories(query: 'Hàn Mặc Kiếm');
+      expect(byAuthor, hasLength(1));
+      // Không mất kết quả cũ theo tên người đăng (seed).
+      expect(await mock.fetchStories(query: 'Lâm Gia Huy'), hasLength(2));
+    });
+
+    test('createStory: originalAuthor trim khi có, rỗng → null', () async {
+      final MockApiService mock = api();
+      await mock.login('tacgia@vietread.vn', 'VietRead@123');
+
+      final Story a = await mock.createStory(
+        title: 'Có Tác Giả',
+        originalAuthor: '  Băng Tụy Trà  ',
+      );
+      expect(a.originalAuthor, 'Băng Tụy Trà');
+      expect(a.uploaderName, 'tacgia'); // người đăng = mình
+      expect(a.author, 'Băng Tụy Trà'); // trường tương thích
+
+      final Story b = await mock.createStory(
+        title: 'Không Tác Giả',
+        originalAuthor: '   ',
+      );
+      expect(b.originalAuthor, isNull);
+      expect(b.author, 'tacgia'); // fallback = người đăng
+    });
+
+    test('updateStory: đổi / xoá (rỗng) / không gửi thì giữ nguyên', () async {
+      final MockApiService mock = api();
+      await mock.login('tacgia@vietread.vn', 'VietRead@123');
+      final Story s = await mock.createStory(
+        title: 'Sửa Tác Giả',
+        originalAuthor: 'A',
+      );
+
+      final Story updated = await mock.updateStory(s.id, originalAuthor: '  B  ');
+      expect(updated.originalAuthor, 'B');
+
+      final Story cleared = await mock.updateStory(s.id, originalAuthor: '');
+      expect(cleared.originalAuthor, isNull);
+
+      await mock.updateStory(s.id, originalAuthor: 'C');
+      final Story unchanged = await mock.updateStory(s.id, title: 'Đổi Tên');
+      expect(unchanged.originalAuthor, 'C'); // không gửi key → giữ nguyên
+    });
   });
 }

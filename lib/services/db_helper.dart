@@ -98,17 +98,26 @@ class DbHelper {
         p.join(await databaseFactory.getDatabasesPath(), 'vietread.db');
     return openDatabase(
       path,
-      version: 1,
+      version: 2,
       // Không dùng singleInstance: nếu lần mở trước lỗi/ở môi trường khác
       // thì Future cũ còn "treo" kéo theo mọi lần mở sau.
       singleInstance: false,
+      // v1→v2: thêm cột originalAuthor/uploaderName (giữ nguyên dữ liệu đã tải).
+      onUpgrade: (Database db, int oldVersion, int newVersion) async {
+        if (oldVersion < 2) {
+          await _addColumnIfMissing(db, 'downloaded_stories', 'originalAuthor');
+          await _addColumnIfMissing(db, 'downloaded_stories', 'uploaderName');
+        }
+      },
       onCreate: (Database db, int version) async {
-        // A4: downloaded_stories(id, title, author, coverPath, description)
+        // A4: downloaded_stories + cột tác giả/người đăng (v2)
         await db.execute('''
           CREATE TABLE downloaded_stories(
             id INTEGER PRIMARY KEY,
             title TEXT NOT NULL,
             author TEXT NOT NULL DEFAULT '',
+            originalAuthor TEXT,
+            uploaderName TEXT,
             coverPath TEXT,
             description TEXT
           )
@@ -149,6 +158,19 @@ class DbHelper {
   // Truyện / chương đã tải
   // ------------------------------------------------------------------
 
+  /// Thêm cột vào bảng đã tồn tại nếu chưa có (migration idempotent).
+  Future<void> _addColumnIfMissing(Database db, String table, String column) async {
+    final List<Map<String, Object?>> info = await db.rawQuery(
+      'PRAGMA table_info($table)',
+    );
+    final bool exists = info.any(
+      (Map<String, Object?> c) => c['name'] == column,
+    );
+    if (!exists) {
+      await db.execute('ALTER TABLE $table ADD COLUMN $column TEXT');
+    }
+  }
+
   /// Ghi (hoặc ghi đè) thông tin truyện vào `downloaded_stories`.
   Future<void> upsertDownloadedStory(DownloadedStory story) async {
     final Database db = await _db;
@@ -156,6 +178,8 @@ class DbHelper {
       'id': story.id,
       'title': story.title,
       'author': story.author,
+      'originalAuthor': story.originalAuthor,
+      'uploaderName': story.uploaderName,
       'coverPath': story.coverPath,
       'description': story.description,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
@@ -210,7 +234,8 @@ class DbHelper {
   Future<List<DownloadedStory>> downloadedStories() async {
     final Database db = await _db;
     final List<Map<String, Object?>> rows = await db.rawQuery('''
-      SELECT s.id, s.title, s.author, s.coverPath, s.description,
+      SELECT s.id, s.title, s.author, s.originalAuthor, s.uploaderName,
+             s.coverPath, s.description,
              (SELECT COUNT(*) FROM downloaded_chapters c WHERE c.storyId = s.id) AS chapterCount
       FROM downloaded_stories s
       ORDER BY s.title COLLATE NOCASE

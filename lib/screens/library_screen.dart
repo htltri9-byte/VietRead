@@ -596,6 +596,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
       itemCount: _downloaded.length,
       itemBuilder: (BuildContext context, int i) {
         final DownloadedStory story = _downloaded[i];
+        // Tác giả nguyên tác; db cũ chưa có cột → "Chưa rõ" tới khi tải lại.
+        final String author = (story.originalAuthor ?? '').trim();
         return Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: Card(
@@ -607,7 +609,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              subtitle: Text('${story.author} · ${story.chapterCount} chương'),
+              subtitle: Text(
+                '${author.isEmpty ? 'Chưa rõ' : author} · ${story.chapterCount} chương',
+              ),
               trailing: IconButton(
                 onPressed: () => _confirmRemoveDownloaded(story),
                 icon: const Icon(Icons.delete_outline_rounded),
