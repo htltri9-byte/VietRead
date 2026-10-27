@@ -1,0 +1,13 @@
+# ambiguous.txt — Danh sách TRẮNG: khóa ĐA NGHĨA THẬT SỰ, luôn tạo marker
+# (mức Ít và Vừa đều đánh dấu các khóa trong đây, sau khi qua bước gộp trùng).
+#
+# Format: mỗi dòng MỘT khóa chữ Trung, UTF-8; dòng bắt đầu bằng # là chú thích.
+# Sửa file xong không cần restart (get_lists tự nạp lại) hoặc bấm
+# POST /dictionary/mark-lists/reload.
+#
+# File này thường TRỐNG — nội dung mặc định nằm ở ambiguous.seed.txt (đóng gói
+# kèm repo, nạp tiếp khi file này không có khóa).
+# Khi cả hai không có khóa, mức Ít dùng bộ lọc nghiêm ngặt (bước 1-5 + loại synonyms).
+#
+# Ghi chú: 6 khóa có luật cũ {a:b} viết tay trong vietphrase.txt
+# (一顿 不为 为 定为 当等) luôn được coi là có trong danh sách này.
