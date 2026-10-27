@@ -12,6 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import database
 from .routers import (
+    admin,
     auth,
     chapter_import,
     chapters,
@@ -80,6 +81,7 @@ app.include_router(imports.router)
 app.include_router(dictionary.router)
 app.include_router(glossary.router)
 app.include_router(markers.router)
+app.include_router(admin.router)   # kiểm duyệt — toàn bộ yêu cầu role=admin
 
 
 # --- Endpoint kiểm tra nhanh ----------------------------------------------------

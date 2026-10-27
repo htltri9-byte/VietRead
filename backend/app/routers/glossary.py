@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from .. import security
 from ..database import get_db
+from ..moderation import mark_needs_recheck
 from ..models import Chapter, ChapterRevision, Story, StoryGlossary, User
 from ..schemas import (
     GlossaryRuleOut,
@@ -165,6 +166,8 @@ def replace_in_story(
         )
 
     story.updated_at = utc_now()
+    if changed:
+        mark_needs_recheck(story)   # approved → Admin cần xem lại nội dung đã đổi
     db.commit()  # một transaction cho toàn bộ lần thay
 
     return ReplaceOut(

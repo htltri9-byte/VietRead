@@ -8,6 +8,7 @@ import '../models/comment.dart';
 import '../models/genre.dart';
 import '../models/glossary.dart';
 import '../models/import_job.dart';
+import '../models/moderation.dart';
 import '../models/story.dart';
 import '../models/story_word.dart';
 import '../models/user.dart';
@@ -226,6 +227,44 @@ abstract class ApiService {
 
   /// DELETE /stories/{id}/glossary/{ruleId} — xoá một quy tắc.
   Future<void> deleteGlossaryRule(int storyId, int ruleId);
+
+  // ------------------------- Kiểm duyệt (tác giả + admin) ------------------
+
+  /// POST /stories/{id}/submit — chủ truyện GỬI DUYỆT (draft/rejected → pending).
+  /// Backend yêu cầu `confirmRights=true` (app đã xác nhận qua hộp thoại) và
+  /// truyện đủ điều kiện (tên, mô tả, thể loại, ≥ 1 chương) — thiếu → 400.
+  Future<Story> submitStory(int storyId);
+
+  /// POST /stories/{id}/unpublish — chủ truyện GỠ truyện đã duyệt về nháp.
+  Future<Story> unpublishStory(int storyId);
+
+  /// GET /admin/stories?status=&q=&page=&pageSize= — danh sách cho màn Kiểm duyệt
+  /// (chỉ admin; 401 khi chưa đăng nhập, 403 với người thường).
+  /// `status`: pending | approved | rejected | draft | recheck | all.
+  Future<List<AdminStory>> fetchAdminStories({
+    required String status,
+    String? query,
+    int page = 1,
+    int pageSize = 20,
+  });
+
+  /// GET /admin/stories/{id} — thông tin + danh sách chương (xem trước).
+  Future<AdminStoryDetail> fetchAdminStory(int storyId);
+
+  /// GET /admin/chapters/{chapterId} — nội dung chương ĐÃ resolve marker
+  /// (không dấu {}) kèm OriginalContent nếu có — để Admin đọc.
+  Future<AdminChapter> fetchAdminChapter(int chapterId);
+
+  /// POST /admin/stories/{id}/approve — duyệt (pending hoặc approved+cần xem lại);
+  /// đã bị admin khác xử lý → 409.
+  Future<void> approveAdminStory(int storyId);
+
+  /// POST /admin/stories/{id}/reject — từ chối/gỡ vì vi phạm, `reason` bắt buộc
+  /// 5–1000 ký tự (thiếu → 400).
+  Future<void> rejectAdminStory(int storyId, {required String reason});
+
+  /// GET /admin/stats — số truyện theo từng trạng thái (badge "Chờ duyệt (N)").
+  Future<AdminStats> fetchAdminStats();
 
   // ------------------------- Gợi ý nhiều nghĩa theo truyện ----------------
 
@@ -916,5 +955,88 @@ class HttpApiService implements ApiService {
   @override
   Future<void> deleteIgnoredWord(int storyId, int wordId) async {
     await _request('DELETE', '/stories/$storyId/ignored-words/$wordId');
+  }
+
+  // ------------------------- Kiểm duyệt (tác giả + admin) ------------------
+
+  @override
+  Future<Story> submitStory(int storyId) async {
+    final dynamic data = await _request(
+      'POST',
+      '/stories/$storyId/submit',
+      // Hộp thoại gửi duyệt đã cho người dùng tích xác nhận quyền đăng.
+      payload: <String, dynamic>{'confirmRights': true},
+    );
+    return _readStory(data);
+  }
+
+  @override
+  Future<Story> unpublishStory(int storyId) async {
+    final dynamic data = await _request('POST', '/stories/$storyId/unpublish');
+    return _readStory(data);
+  }
+
+  @override
+  Future<List<AdminStory>> fetchAdminStories({
+    required String status,
+    String? query,
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    final Map<String, String> params = <String, String>{
+      'status': status,
+      'page': '$page',
+      'pageSize': '$pageSize',
+      if (query != null && query.trim().isNotEmpty) 'q': query.trim(),
+    };
+    final dynamic data = await _get('/admin/stories', query: params);
+    if (data is! List) {
+      throw const ApiException('Danh sách kiểm duyệt không hợp lệ.');
+    }
+    return data
+        .whereType<Map<String, dynamic>>()
+        .map(AdminStory.fromJson)
+        .toList(growable: false);
+  }
+
+  @override
+  Future<AdminStoryDetail> fetchAdminStory(int storyId) async {
+    final dynamic data = await _get('/admin/stories/$storyId');
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Chi tiết kiểm duyệt không hợp lệ.');
+    }
+    return AdminStoryDetail.fromJson(data);
+  }
+
+  @override
+  Future<AdminChapter> fetchAdminChapter(int chapterId) async {
+    final dynamic data = await _get('/admin/chapters/$chapterId');
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Nội dung chương không hợp lệ.');
+    }
+    return AdminChapter.fromJson(data);
+  }
+
+  @override
+  Future<void> approveAdminStory(int storyId) async {
+    await _request('POST', '/admin/stories/$storyId/approve');
+  }
+
+  @override
+  Future<void> rejectAdminStory(int storyId, {required String reason}) async {
+    await _request(
+      'POST',
+      '/admin/stories/$storyId/reject',
+      payload: <String, dynamic>{'reason': reason},
+    );
+  }
+
+  @override
+  Future<AdminStats> fetchAdminStats() async {
+    final dynamic data = await _get('/admin/stats');
+    if (data is! Map<String, dynamic>) {
+      throw const ApiException('Số liệu kiểm duyệt không hợp lệ.');
+    }
+    return AdminStats.fromJson(data);
   }
 }

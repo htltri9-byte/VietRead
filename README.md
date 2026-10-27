@@ -365,8 +365,9 @@ Tay trên emulator (`flutter run`, backend đang chạy):
 - Tab **Đăng truyện** ([`lib/screens/upload_screen.dart`](lib/screens/upload_screen.dart)):
   chưa đăng nhập → lời mời + nút **Đăng nhập**; đã đăng nhập → danh sách "Truyện của tôi"
   (dòng có chip **Nháp**), kéo để làm mới, FAB **Truyện mới**, menu từng dòng:
-  **Sửa thông tin / Quản lý chương / Đăng công khai (hoặc Chuyển về nháp) / Xoá truyện**
-  (xoá có dialog xác nhận → snackbar).
+  **Sửa thông tin / Quản lý chương / Gửi duyệt (hoặc Đang chờ duyệt / Gỡ xuống)
+  / Xoá truyện** (xoá có dialog xác nhận → snackbar). Truyện chỉ hiện công khai
+  sau khi Admin duyệt (xem mục 10D).
 - [`lib/screens/story_form_screen.dart`](lib/screens/story_form_screen.dart) — tạo/sửa
   truyện: tên*, mô tả, ảnh bìa (URL), ô **"Tác giả (nguyên tác)"** (không bắt buộc,
   ≤ 200 ký tự, có gợi ý + nút **"Dùng tên tài khoản của tôi"**; truyện nhập từ link
@@ -404,8 +405,10 @@ Tay trên emulator (`flutter run`, backend đang chạy; `API_BASE_URL` mặc đ
    → truyện mới ở đầu danh sách kèm chip **Nháp**.
 3. Bấm "…" → **Quản lý chương** → **Chương mới** → nhập tên + nội dung → **Lưu**
    → chương hiện trong danh sách (ô "Số chương" để trống là tự đánh số).
-4. Menu → **Đăng công khai** → snackbar + mất chip Nháp (vào lại menu thấy
-   **Chuyển về nháp**); **Sửa thông tin** → đổi tên/thể loại → **Lưu** → danh sách cập nhật.
+4. Menu → **Gửi duyệt** → hộp thoại tích "Tôi là tác giả hoặc có quyền đăng
+   nội dung này" → **Gửi duyệt** → chip đổi sang **Chờ duyệt** (thiếu điều kiện
+   → lỗi 400 kèm lý do; chờ Admin duyệt mới công khai).
+   **Sửa thông tin** → đổi tên/thể loại → **Lưu** → danh sách cập nhật.
 5. Menu → **Xoá truyện** → dialog xác nhận → **Xoá** → biến mất + snackbar
    (bấm **Huỷ** thì giữ nguyên).
 6. Đăng xuất, đăng nhập `docgia@vietread.vn` → tab Đăng truyện → trạng thái rỗng
@@ -611,7 +614,8 @@ Kết quả mới nhất trên máy này: `flutter analyze` 0 lỗi · `flutter 
    "Chương N – Tên chương"; Tải offline → bật máy bay → tab Đã tải đọc được.
 5. **Bình luận**: gửi 1 bình luận → hiện đầu danh sách → xoá (dialog xác nhận).
 6. **Đăng truyện**: `tacgia@vietread.vn` → tạo truyện nháp → thêm chương →
-   Đăng công khai → xoá (dialog xác nhận).
+   **Gửi duyệt** (tích xác nhận quyền) → chip **Chờ duyệt** → đăng xuất, vào
+   `admin@vietread.vn` duyệt → truyện hiện công khai (mục 10D).
 7. **Nhập link**: dán `https://demo.vietread.local/book/1` → chạy tới 100%
    **Hoàn tất** → truyện nháp hiện trong "Truyện của tôi".
 8. **Trạng thái lỗi import**: dán `https://example.com/book/1` → job **Thất bại**
@@ -784,6 +788,76 @@ flutter test   # 148/148 (gồm alternatives_test, mức gợi ý)
 
 Mở chương có marker → chạm marker → chọn nghĩa → áp dụng ngay, giữ nguyên
 qua lần dịch lại (quy tắc "luôn dùng"/"không hỏi lại" chỉ còn qua API).
+
+---
+
+## 10D. Kiểm duyệt truyện trước khi công khai (Admin)
+
+Truyện **chỉ hiện công khai trên app khi ở trạng thái `approved`** — chủ
+truyện bấm **Gửi duyệt**, Admin duyệt/từ chối ở mục riêng. Chi tiết backend
+(schema, migration, endpoint) xem [`backend/README.md`](backend/README.md).
+
+### Bảng trạng thái `Stories.ModerationStatus`
+
+| Trạng thái | Ý nghĩa | AI thấy ngoài app? |
+|---|---|---|
+| `draft` | Nháp (mới tạo / Admin gỡ xuống) | Không (kể cả xem bằng id → 404) |
+| `pending` | Đã gửi duyệt, chờ Admin | Không |
+| `approved` | Đã duyệt | Có — mọi endpoint người đọc |
+| `rejected` | Bị từ chối (kèm `RejectReason`) | Không |
+
+Chuyển trạng thái hợp lệ (mọi chuyển khác → 409):
+`draft → pending` (chủ truyện gửi duyệt) · `pending → approved | rejected`
+(Admin) · `rejected → pending` (sửa rồi gửi lại) · `approved → draft`
+(gỡ xuống) · `approved → rejected` (Admin gỡ vì vi phạm, bắt buộc lý do).
+Cột `IsDraft` luôn đồng bộ: `IsDraft = 0` ⇔ `approved` (xem backend README).
+
+### Phía tác giả — tab Đăng truyện
+
+- Chip trạng thái trên mỗi dòng: **Nháp / Chờ duyệt / Đã duyệt / Bị từ chối**
+  (truyện từ chối hiện rõ **lý do** ngay dưới tên).
+- Menu: nháp hoặc bị từ chối → **Gửi duyệt** / **Gửi lại** (hộp thoại phải tích
+  "Tôi là tác giả hoặc có quyền đăng nội dung này" — thiếu điều kiện: tên, mô tả,
+  thể loại, ≥ 1 chương → lỗi 400 kèm lý do); đang chờ duyệt → **Đang chờ duyệt**
+  (vẫn sửa được, không ảnh hưởng thứ tự); đã duyệt → **Gỡ xuống** (về nháp).
+- Sửa/thêm/xoá chương của truyện **đã duyệt** → backend đặt `NeedsRecheck = 1`
+  để Admin xem lại (truyện vẫn hiện công khai).
+
+### Phía Admin — màn Tài khoản → "Kiểm duyệt truyện"
+
+- Mục menu **chỉ hiện khi `role = admin`**, kèm badge số truyện chờ duyệt
+  (`GET /admin/stats`).
+- Màn **Kiểm duyệt**: 4 chip lọc *Chờ duyệt · Đã duyệt · Từ chối · Cần xem lại*,
+  thẻ truyện (bìa, tên, tác giả, số chương, lúc gửi, chip), kéo để làm mới,
+  phân trang 20/trang, skeleton/empty/error.
+- **Chi tiết kiểm duyệt**: thông tin + mô tả + thể loại, danh sách chương → bấm
+  chương để đọc (màn đọc riêng, không ghi tiến độ), khối **Kết quả quét tự động**
+  (ẩn khi `ScanStatus` rỗng — chỗ dành cho dịch vụ quét sau này), nút **Duyệt**
+  (có dialog xác nhận) và **Từ chối** (hộp thoại lý do bắt buộc 5–1000 ký tự).
+- Người thường / chưa đăng nhập gọi `/admin/*` → 403 / 401 (màn hiện lỗi có nút
+  Thử lại). Hai Admin xử lý cùng truyện → người sau nhận 409.
+
+### Hướng dẫn test tay (10D)
+
+```bash
+# 1) Migration (idempotent — chạy lại an toàn):
+cd backend && sqlcmd -S localhost -E -C -b -f 65001 -i database/migrate_moderation.sql
+# 2) Tạo tài khoản Admin (KHÔNG hardcode mật khẩu — nhận từ tham số):
+cd backend && ./.venv/Scripts/python.exe tools/create_admin.py \
+  --email admin@vietread.vn --password 'MAT_KHAU_MANH_MOI'
+# 3) Bật backend, chạy test:
+cd backend && PYTHONUTF8=1 ./.venv/Scripts/python.exe test_api.py   # 333/333
+# 4) Flutter:
+flutter analyze   # No issues found
+flutter test      # 178/178
+```
+
+Tay trên app: `tacgia@vietread.vn` → tạo truyện + chương → **Gửi duyệt**
+(tích xác nhận quyền) → chip **Chờ duyệt**, đăng xuất → đăng nhập tài khoản
+Admin → tab Tài khoản → **Kiểm duyệt truyện** → tab **Chờ duyệt** → mở truyện →
+đọc thử 1 chương → **Duyệt** (hoặc **Từ chối** với lý do ≥ 5 ký tự) → quay lại
+thấy danh sách cập nhật; đăng nhập lại `tacgia` → truyện đã duyệt có menu
+**Gỡ xuống**.
 
 ---
 

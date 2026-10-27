@@ -11,7 +11,7 @@ from . import marking
 
 
 class UserOut(BaseModel):
-    """Thông tin người dùng trả về cho client: { id, name, email, avatarUrl }."""
+    """Thông tin người dùng trả về cho client: { id, name, email, avatarUrl, role }."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -19,6 +19,9 @@ class UserOut(BaseModel):
     name: str
     email: str
     avatar_url: str | None = Field(default=None, alias="avatarUrl")
+    # Thêm TRƯỜNG MỚI (không đổi format cũ): 'user' | 'admin' — app cần biết
+    # để hiện mục "Kiểm duyệt truyện". Client cũ bỏ qua trường lạ này.
+    role: str = "user"
 
 
 class RegisterRequest(BaseModel):
@@ -72,6 +75,7 @@ def user_to_out(user) -> UserOut:
         name=user.name,
         email=user.email,
         avatarUrl=user.avatar_url,
+        role=getattr(user, "role", "user") or "user",
     )
 
 
@@ -194,6 +198,12 @@ class StoryOut(BaseModel):
     rating: float
     chapter_count: int = Field(default=0, alias="chapterCount")
     is_draft: bool = Field(default=False, alias="isDraft")
+    # --- Kiểm duyệt (THÊM trường mới — client cũ bỏ qua) -------------------
+    moderation_status: str = Field(default="draft", alias="moderationStatus")
+    reject_reason: str | None = Field(default=None, alias="rejectReason")
+    needs_recheck: bool = Field(default=False, alias="needsRecheck")
+    submitted_at: datetime | None = Field(default=None, alias="submittedAt")
+    scan_status: str | None = Field(default=None, alias="scanStatus")
     updated_at: datetime = Field(alias="updatedAt")
 
 
@@ -742,3 +752,101 @@ class MarkRuleOut(BaseModel):
     skip_count: int = Field(alias="skipCount")
     created_at: datetime = Field(alias="createdAt")
     meanings: list[str] | None = Field(default=None)
+
+
+# ===========================================================================
+# Kiểm duyệt truyện (Admin) — moderation
+# ===========================================================================
+
+MODERATION_STATUSES = ("draft", "pending", "approved", "rejected")
+
+
+class StorySubmitIn(BaseModel):
+    """POST /stories/{id}/submit — { confirmRights: true }.
+
+    `confirmRights` = chủ truyện xác nhận "tôi là tác giả hoặc có quyền đăng
+    nội dung này". Thiếu/false → 400 kèm lý do.
+    """
+
+    confirm_rights: bool = Field(default=False, alias="confirmRights")
+
+
+class ModerationRejectIn(BaseModel):
+    """POST /admin/stories/{id}/reject — { reason } (bắt buộc, 5–1000 ký tự)."""
+
+    reason: str = Field(min_length=5, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def _strip_reason(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 5:
+            raise ValueError("Lý do từ chối cần ít nhất 5 ký tự")
+        return value
+
+
+class AdminStoryOut(BaseModel):
+    """GET /admin/stories — một thẻ trong màn Kiểm duyệt."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: int
+    title: str
+    cover_url: str | None = Field(default=None, alias="coverUrl")
+    author: str = ""                 # tên người đăng (uploader)
+    chapter_count: int = Field(default=0, alias="chapterCount")
+    moderation_status: str = Field(alias="moderationStatus")
+    reject_reason: str | None = Field(default=None, alias="rejectReason")
+    needs_recheck: bool = Field(default=False, alias="needsRecheck")
+    submitted_at: datetime | None = Field(default=None, alias="submittedAt")
+    reviewed_at: datetime | None = Field(default=None, alias="reviewedAt")
+    scan_status: str | None = Field(default=None, alias="scanStatus")
+
+
+class AdminStoryDetailOut(BaseModel):
+    """GET /admin/stories/{id} — thông tin truyện + danh sách chương (xem trước
+    kể cả khi truyện chưa công khai)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    story: AdminStoryOut
+    description: str | None = None
+    genres: list[str] = Field(default_factory=list)
+    original_author: str | None = Field(default=None, alias="originalAuthor")
+    uploader_name: str = Field(default="", alias="uploaderName")
+    chapters: list[ChapterSummaryOut] = Field(default_factory=list)
+
+
+class AdminChapterOut(BaseModel):
+    """GET /admin/chapters/{chapterId} — nội dung chương đã resolve marker
+    (không có dấu {}), kèm OriginalContent nếu có."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: int
+    story_id: int = Field(alias="storyId")
+    index: int
+    title: str
+    content: str                              # đã resolve marker
+    original_content: str | None = Field(default=None, alias="originalContent")
+
+
+class AdminStatsOut(BaseModel):
+    """GET /admin/stats — số truyện theo từng trạng thái (badge \"Chờ duyệt (N)\")."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    draft: int = 0
+    pending: int = 0
+    approved: int = 0
+    rejected: int = 0
+    needs_recheck: int = Field(default=0, alias="needsRecheck")
+
+
+class ModerationActionOut(BaseModel):
+    """POST /admin/stories/{id}/approve|reject — kết quả + trạng thái mới."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    message: str
+    moderation_status: str = Field(alias="moderationStatus")

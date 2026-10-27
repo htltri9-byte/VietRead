@@ -149,6 +149,9 @@ check("POST chương chưa đăng nhập → 401", r.status_code == 401, r.text)
 print("\n=== TẠO / SỬA / XOÁ TRUYỆN (tác giả) ===")
 tac_gia = login("tacgia@vietread.vn", "VietRead@123")
 doc_gia = login("docgia@vietread.vn", "VietRead@123")
+# Admin seed (xem backend/README.md → "Tạo tài khoản Admin"; phải đổi mật khẩu
+# trước khi triển khai thật) — dùng để duyệt truyện trong phần kiểm thử mới.
+adm_gia = login("admin@vietread.vn", "VietRead@123")
 
 r = client.post("/stories", json={"title": "  B2 Sai Trạng Thái  ", "status": "abc"}, headers=auth(tac_gia))
 check("status sai → 400", r.status_code == 400 and "message" in r.json(), r.text)
@@ -170,6 +173,28 @@ check("không gửi originalAuthor → null; uploaderName = người đăng",
       new_story["originalAuthor"] is None
       and new_story["uploaderName"] == "Trần Nhật Nam", str(new_story))
 sid = new_story["id"]
+
+# --- Kiểm duyệt: truyện chỉ CÔNG KHAI sau khi Admin duyệt ------------------
+# Thêm chương + gửi duyệt + admin duyệt ngay đây để các kiểm tra công khai
+# bên dưới (lọc thể loại, tìm theo tên tác giả) thấy đúng truyện này.
+r = client.post(f"/stories/{sid}/chapters",
+                json={"title": "Chương 1", "content": "Nội dung thử chương 1."},
+                headers=auth(tac_gia))
+check("tạo chương 1 (tự đánh số)", r.status_code == 200 and r.json()["index"] == 1, r.text)
+ch1 = r.json()
+r = client.post(f"/stories/{sid}/chapters",
+                json={"title": "Chương 2", "content": "Nội dung thử chương 2."},
+                headers=auth(tac_gia))
+check("tạo chương 2 (tự đánh số)", r.status_code == 200 and r.json()["index"] == 2, r.text)
+
+r = client.post(f"/stories/{sid}/submit", json={"confirmRights": True},
+                headers=auth(tac_gia))
+check("POST /stories/{id}/submit = 200 → pending",
+      r.status_code == 200 and r.json()["moderationStatus"] == "pending"
+      and r.json()["isDraft"] is True, r.text)
+r = client.post(f"/admin/stories/{sid}/approve", headers=auth(adm_gia))
+check("admin duyệt = 200 → approved (isDraft=false)",
+      r.status_code == 200 and r.json()["moderationStatus"] == "approved", r.text)
 
 r = client.get("/stories", params={"genre": "Kiểm Thử"})
 check("thể loại mới tự tạo và lọc được",
@@ -216,15 +241,7 @@ check("originalAuthor rỗng → null (NULL trong DB)",
       and r.json()["author"] == "Trần Nhật Nam", r.text)
 
 print("\n=== CRUD CHƯƠNG ===")
-r = client.post(f"/stories/{sid}/chapters",
-                json={"title": "Chương 1", "content": "Nội dung thử chương 1."},
-                headers=auth(tac_gia))
-check("tạo chương 1 (tự đánh số)", r.status_code == 200 and r.json()["index"] == 1, r.text)
-ch1 = r.json()
-r = client.post(f"/stories/{sid}/chapters",
-                json={"title": "Chương 2", "content": "Nội dung thử chương 2."},
-                headers=auth(tac_gia))
-check("tạo chương 2 (tự đánh số)", r.status_code == 200 and r.json()["index"] == 2, r.text)
+# (Chương 1 + 2 đã tạo ở phần Kiểm duyệt phía trên — cùng truyện `sid`)
 r = client.post(f"/stories/{sid}/chapters",
                 json={"title": "Trùng", "content": "X", "index": 2}, headers=auth(tac_gia))
 check("index trùng → 400", r.status_code == 400 and "message" in r.json(), r.text)
@@ -643,8 +660,11 @@ r = client.get("/me/mark-rules", headers=auth(tac_gia))
 for stale in r.json():
     client.delete(f"/me/mark-rules/{stale['id']}", headers=auth(tac_gia))
 
-r = client.post("/stories", json={"title": "Truyện Kiểm Thử Marker B12"},
-                headers=auth(tac_gia))
+r = client.post("/stories", json={
+    "title": "Truyện Kiểm Thử Marker B12",
+    "description": "Cần đủ điều kiện để gửi duyệt (mô tả + thể loại + chương).",
+    "genres": ["Huyền Huyễn"],
+}, headers=auth(tac_gia))
 check("tạo truyện kiểm thử marker", r.status_code == 200, r.text)
 mk_sid = r.json()["id"]
 
@@ -661,6 +681,15 @@ check("mỗi marker ≥ 2 nghĩa và ≤ 6 nghĩa (mọi phần tử là tiếng
       str(markers))
 check("MỌI marker trong bản thô không chứa ký tự CJK",
       all(not alternatives.has_cjk(mk) for mk in markers), raw[:200])
+
+# Truyện cần được Admin duyệt để NGƯỜI ĐỌC (khách) xem được — đúng luồng app.
+r = client.post(f"/stories/{mk_sid}/submit", json={"confirmRights": True},
+                headers=auth(tac_gia))
+check("gửi duyệt truyện marker = 200 → pending",
+      r.status_code == 200 and r.json()["moderationStatus"] == "pending", r.text)
+r = client.post(f"/admin/stories/{mk_sid}/approve", headers=auth(adm_gia))
+check("admin duyệt truyện marker → approved",
+      r.status_code == 200 and r.json()["moderationStatus"] == "approved", r.text)
 
 r = client.get(f"/chapters/{mk_ch['id']}")
 check("GET /chapters (khách) = 200", r.status_code == 200, r.text)
@@ -1029,8 +1058,11 @@ def mk_markers(text: str) -> list[str]:
 ZH1 = "他见过她三次，似乎很有钱。"  # 见过了 nghĩa (khóa đa chữ) + 似乎 (synonyms.txt)
 ZH2 = "她又见到他。"
 
-r = client.post("/stories", json={"title": "Truyện Kiểm Thử Gợi Ý Nghĩa"},
-                headers=auth(tac_gia))
+r = client.post("/stories", json={
+    "title": "Truyện Kiểm Thử Gợi Ý Nghĩa",
+    "description": "Cần đủ điều kiện để gửi duyệt (mô tả + thể loại + chương).",
+    "genres": ["Tiên Hiệp"],
+}, headers=auth(tac_gia))
 check("tạo truyện kiểm thử gợi ý = 200", r.status_code == 200, r.text)
 mk_sid = r.json()["id"]
 
@@ -1044,6 +1076,15 @@ r = client.post(f"/stories/{mk_sid}/chapters/import-text",
                 headers=auth(tac_gia))
 check("nhập chương 2 (zh) = 200", r.status_code == 200, r.text)
 mk_ch2 = r.json()["id"]
+
+# Duyệt để người đọc (khách) xem được bản resolve ở các kiểm tra dưới đây
+r = client.post(f"/stories/{mk_sid}/submit", json={"confirmRights": True},
+                headers=auth(tac_gia))
+check("gửi duyệt truyện gợi ý = 200 → pending",
+      r.status_code == 200 and r.json()["moderationStatus"] == "pending", r.text)
+r = client.post(f"/admin/stories/{mk_sid}/approve", headers=auth(adm_gia))
+check("admin duyệt truyện gợi ý → approved",
+      r.status_code == 200 and r.json()["moderationStatus"] == "approved", r.text)
 
 r = client.get(f"/chapters/{mk_ch1}?raw=1", headers=auth(tac_gia))
 raw1 = r.json()["content"]

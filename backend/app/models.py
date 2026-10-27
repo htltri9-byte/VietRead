@@ -40,6 +40,10 @@ class User(Base):
     email: Mapped[str] = mapped_column("Email", Unicode(255), nullable=False, unique=True)
     password_hash: Mapped[str] = mapped_column("PasswordHash", Unicode(255), nullable=False)
     avatar_url: Mapped[str | None] = mapped_column("AvatarUrl", Unicode(500), nullable=True)
+    # Vai trò: 'user' | 'admin' — admin xét duyệt truyện (tools/create_admin.py)
+    role: Mapped[str] = mapped_column(
+        "Role", Unicode(20), nullable=False, default="user"
+    )
     created_at: Mapped[datetime] = mapped_column(
         "CreatedAt", DateTime, nullable=False, server_default=_utc_now_db()
     )
@@ -77,11 +81,54 @@ class Story(Base):
         "OriginalAuthorRaw", Unicode(200), nullable=True
     )
     is_draft: Mapped[bool] = mapped_column("IsDraft", Boolean, nullable=False, default=False)
+    # --- Kiểm duyệt trước khi công khai (migrate_moderation.sql) ------------
+    # draft | pending | approved | rejected.
+    # QUY TẮC NHẤT QUÁN: is_draft = False CHỈ khi moderation_status = 'approved'
+    # — mọi thao tác chuyển trạng thái đều đi qua helpers của routers/moderation.py.
+    moderation_status: Mapped[str] = mapped_column(
+        "ModerationStatus", Unicode(20), nullable=False, default="draft"
+    )
+    reject_reason: Mapped[str | None] = mapped_column(
+        "RejectReason", Unicode(1000), nullable=True
+    )
+    submitted_at: Mapped[datetime | None] = mapped_column("SubmittedAt", DateTime, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column("ReviewedAt", DateTime, nullable=True)
+    reviewed_by: Mapped[int | None] = mapped_column(
+        "ReviewedBy", Integer, ForeignKey("Users.Id"), nullable=True
+    )
+    # Truyện approved nhưng chủ truyện sửa/thêm chương → Admin nên xem lại
+    needs_recheck: Mapped[bool] = mapped_column(
+        "NeedsRecheck", Boolean, nullable=False, default=False
+    )
+    # Chỗ dành cho dịch vụ quét tự động sau này (chỉ tạo cột, chưa dùng):
+    # none | clean | flagged | error; ScanSummary = JSON kết quả
+    scan_status: Mapped[str | None] = mapped_column("ScanStatus", Unicode(20), nullable=True)
+    scan_summary: Mapped[str | None] = mapped_column("ScanSummary", UnicodeText, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         "CreatedAt", DateTime, nullable=False, server_default=_utc_now_db()
     )
     updated_at: Mapped[datetime] = mapped_column(
         "UpdatedAt", DateTime, nullable=False, server_default=_utc_now_db()
+    )
+
+
+class ModerationLog(Base):
+    """Lịch sử kiểm duyệt: mỗi lần Admin duyệt/từ chối/gỡ truyện là một dòng."""
+
+    __tablename__ = "ModerationLog"
+
+    id: Mapped[int] = mapped_column("Id", Integer, primary_key=True, autoincrement=True)
+    story_id: Mapped[int] = mapped_column(
+        "StoryId", Integer, ForeignKey("Stories.Id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    admin_id: Mapped[int] = mapped_column(
+        "AdminId", Integer, ForeignKey("Users.Id"), nullable=False
+    )
+    # 'approve' | 'reject' | 'unpublish'
+    action: Mapped[str] = mapped_column("Action", Unicode(20), nullable=False)
+    reason: Mapped[str | None] = mapped_column("Reason", Unicode(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        "CreatedAt", DateTime, nullable=False, server_default=_utc_now_db()
     )
 
 

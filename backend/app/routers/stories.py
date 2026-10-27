@@ -1,9 +1,12 @@
 """API truyện: GET/POST/PUT/DELETE /stories (Phần B của đề bài).
 
 Quy tắc:
-- Danh sách công khai chỉ chứa truyện đã đăng (IsDraft = 0).
-- Truyện nháp chỉ chủ nhân xem được (trả 404 cho người khác).
+- Danh sách công khai chỉ chứa truyện ĐÃ DUYỆT (ModerationStatus = 'approved').
+- Truyện chưa duyệt (draft/pending/rejected) chỉ chủ nhân và Admin xem được
+  (trả 404 cho người khác) — điều kiện dùng chung ở moderation.can_view.
 - Sửa/xoá chỉ tác giả (403 nếu không phải).
+- "Đăng công khai" cũ (PUT isDraft=false) → 400 hướng dẫn dùng POST /submit;
+  POST /stories/{id}/submit + POST /stories/{id}/unpublish là luồng mới.
 """
 
 from __future__ import annotations
@@ -13,13 +16,18 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import false, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .. import security
 from ..database import get_db
+from ..moderation import (
+    can_view,
+    ensure_transition,
+    set_status,
+)
 from ..models import Chapter, Follow, Genre, Story, StoryGenre, User
-from ..schemas import StoryCreate, StoryOut, StoryUpdate
+from ..schemas import StoryCreate, StoryOut, StorySubmitIn, StoryUpdate
 
 router = APIRouter(tags=["stories"])
 
@@ -51,10 +59,68 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _submit_validation_errors(db: Session, story: Story) -> list[str]:
+    """Điều kiện gửi duyệt — trả về danh sách lý do thiếu (rỗng = đạt)."""
+    errors: list[str] = []
+    if not (story.title and story.title.strip()):
+        errors.append("truyện cần có tên")
+    if not (story.description and story.description.strip()):
+        errors.append("truyện cần có mô tả")
+    genre_count = db.execute(
+        select(func.count()).where(StoryGenre.story_id == story.id)
+    ).scalar()
+    if not genre_count:
+        errors.append("truyện cần có ít nhất 1 thể loại")
+    chapter_count = db.execute(
+        select(func.count()).where(Chapter.story_id == story.id)
+    ).scalar()
+    if not chapter_count:
+        errors.append("truyện cần có ít nhất 1 chương")
+    return errors
+
+
+def _submit_story(
+    db: Session,
+    story: Story,
+    user: User,
+    payload: StorySubmitIn | None = None,
+) -> Story:
+    """Chuyển truyện sang `pending` (dùng bởi POST /submit).
+
+    Điều kiện: ≥ 1 chương, có tên/mô tả/thể loại, và `confirmRights = true`.
+    Thiếu → 400 kèm lý do. Chuyển không hợp lệ (đã pending/approved) → 409.
+    """
+    if payload is not None and not payload.confirm_rights:
+        raise HTTPException(
+            status_code=400,
+            detail="Cần xác nhận 'Tôi là tác giả hoặc có quyền đăng nội dung này' (confirmRights)",
+        )
+    errors = _submit_validation_errors(db, story)
+    if errors:
+        raise HTTPException(status_code=400, detail="Chưa đủ điều kiện gửi duyệt: " + "; ".join(errors))
+    ensure_transition(story.moderation_status, "pending")
+    set_status(
+        story,
+        "pending",
+        submitted_at=utc_now(),
+        clear_reject_reason=True,
+    )
+    story.updated_at = utc_now()
+    db.commit()
+    db.refresh(story)
+    return story
+
+
 def get_story_or_404(db: Session, story_id: int, viewer: User | None) -> Story:
-    """Lấy truyện theo id; không tồn tại hoặc là nháp của người khác → 404."""
+    """Lấy truyện theo id cho endpoint NGƯỜI ĐỌC; không tồn tại hoặc chưa được
+    duyệt mà không phải chủ/admin → 404.
+
+    Điều kiện hiển thị dùng chung ở [app.moderation.can_view] — mọi router người
+    đọc (stories, chapters, comments, follows) đi qua hàm này nên không rải
+    điều kiện lặp.
+    """
     story = db.get(Story, story_id)
-    if story is None or (story.is_draft and (viewer is None or viewer.id != story.author_id)):
+    if story is None or not can_view(story, viewer):
         raise HTTPException(status_code=404, detail="Không tìm thấy truyện")
     return story
 
@@ -123,6 +189,11 @@ def story_outs(db: Session, stories: list[Story]) -> list[StoryOut]:
             rating=float(s.rating or 0),
             chapterCount=int(counts.get(s.id, 0)),
             isDraft=s.is_draft,
+            moderationStatus=s.moderation_status,
+            rejectReason=s.reject_reason,
+            needsRecheck=s.needs_recheck,
+            submittedAt=s.submitted_at,
+            scanStatus=s.scan_status,
             updatedAt=s.updated_at,
         )
         for s in stories
@@ -151,8 +222,9 @@ def list_stories(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=STORY_PAGE_SIZE, ge=1, le=100, alias="pageSize"),
 ) -> list[StoryOut]:
-    """Danh sách truyện đã đăng (không gồm nháp), có tìm kiếm/lọc/sắp xếp/phân trang."""
-    stmt = select(Story).where(Story.is_draft == false())
+    """Danh sách truyện CÔNG KHAI — chỉ truyện đã duyệt (approved). Có tìm kiếm/
+    lọc/sắp xếp/phân trang."""
+    stmt = select(Story).where(Story.moderation_status == "approved")
 
     if query and query.strip():
         pattern = f"%{query.strip()}%"
@@ -233,14 +305,20 @@ def create_story(
     db: Session = Depends(get_db),
     user: User = Depends(security.get_current_user),
 ) -> StoryOut:
-    """Tạo truyện mới (người đăng là người đang đăng nhập; tác giả gốc tuỳ chọn)."""
+    """Tạo truyện mới (người đăng là người đang đăng nhập; tác giả gốc tuỳ chọn).
+
+    Luôn tạo ở trạng thái **draft** — truyện chỉ công khai sau khi Admin duyệt
+    (bấm "Gửi duyệt" → POST /stories/{id}/submit). Trường `isDraft` được nhận
+    để tương thích client cũ nhưng không còn ý nghĩa "công khai ngay".
+    """
     story = Story(
         author_id=user.id,
         title=payload.title,
         description=payload.description,
         cover_url=payload.cover_url,
         status=payload.status,
-        is_draft=payload.is_draft,
+        is_draft=True,          # đồng bộ với ModerationStatus='draft'
+        moderation_status="draft",
         original_author=payload.original_author,
     )
     db.add(story)
@@ -283,9 +361,63 @@ def update_story(
     if "is_draft" in data:
         if payload.is_draft is None:
             raise HTTPException(status_code=400, detail="isDraft phải là true/false")
-        story.is_draft = payload.is_draft
+        if payload.is_draft:
+            # Client cũ gửi isDraft=true nghĩa là "không công khai" — nếu truyện
+            # đang approved thì đây là GỠ XUỐNG (approved → draft); trạng thái
+            # khác đã không công khai rồi → giữ nguyên (không phá luồng sửa
+            # truyện pending/rejected bằng PUT nhiều trường).
+            if story.moderation_status == "approved":
+                ensure_transition(story.moderation_status, "draft")
+                set_status(story, "draft")
+        elif story.moderation_status == "approved":
+            pass  # đã công khai rồi — idempotent, không 409
+        else:
+            # "Đăng công khai" cũ (client cũ PUT isDraft=false) → trả 400 hướng
+            # dẫn dùng endpoint submit mới (response vẫn dạng { message } nên
+            # Flutter cũ hiện lỗi đúng cách, không vỡ). Không tự chuyển trạng
+            # thái vì client cũ KHÔNG gửi confirmRights.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Truyện cần được Admin duyệt trước khi công khai — dùng "
+                    "POST /stories/{id}/submit với { \"confirmRights\": true }"
+                ),
+            )
     if "genres" in data:
         _replace_genres(db, story.id, payload.genres or [])
+    story.updated_at = utc_now()
+    db.commit()
+    db.refresh(story)
+    return story_outs(db, [story])[0]
+
+
+@router.post("/stories/{story_id}/submit", response_model=StoryOut)
+def submit_story(
+    story_id: int,
+    payload: StorySubmitIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(security.get_current_user),
+) -> StoryOut:
+    """Chủ truyện GỬI DUYỆT: draft/rejected → pending.
+
+    Body: `{ confirmRights: true }` — xác nhận quyền đăng nội dung.
+    Thiếu điều kiện → 400 kèm lý do; chuyển không hợp lệ → 409.
+    """
+    story = get_owned_story(db, story_id, user)
+    story = _submit_story(db, story, user, payload)
+    return story_outs(db, [story])[0]
+
+
+@router.post("/stories/{story_id}/unpublish", response_model=StoryOut)
+def unpublish_story(
+    story_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(security.get_current_user),
+) -> StoryOut:
+    """Chủ truyện GỠ XUỐNG: approved → draft (truyện biến mất khỏi app công khai)."""
+    story = get_owned_story(db, story_id, user)
+    ensure_transition(story.moderation_status, "draft")
+    set_status(story, "draft")
     story.updated_at = utc_now()
     db.commit()
     db.refresh(story)

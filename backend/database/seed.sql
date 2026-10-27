@@ -13,6 +13,10 @@
 USE VietRead;
 GO
 
+-- Unique index lọc (UX_Chapters_StoryId_SourceChapterId) yêu cầu QUOTED_IDENTIFIER ON
+SET QUOTED_IDENTIFIER ON;
+GO
+
 IF EXISTS (SELECT 1 FROM dbo.Stories)
 BEGIN
     PRINT N'Dữ liệu mẫu đã tồn tại — bỏ qua seed.';
@@ -42,12 +46,14 @@ BEGIN
     DECLARE @readerId INT = (SELECT Id FROM dbo.Users WHERE Email = N'docgia@vietread.vn');
 
     /* --------------------------- Truyện 1 --------------------------- */
-    INSERT INTO dbo.Stories (AuthorId, Title, Description, CoverUrl, Status, Rating, SourceUrl, IsDraft)
+    -- ModerationStatus='approved': seed là truyện mẫu CÔNG KHAI (bỏ cột này nếu
+    -- chạy seed TRƯỚC migrate_moderation.sql — migration sẽ tự vá lại).
+    INSERT INTO dbo.Stories (AuthorId, Title, Description, CoverUrl, Status, Rating, SourceUrl, IsDraft, ModerationStatus)
     VALUES (
         @authorId,
         N'Kiếm Sư Vọng Tường',
         N'Một thiếu niên đói nghèo ở biên cương vô tình thức tỉnh kiếm ý vạn năm. Để tìm lại sư phụ mất tích, hắn bước lên con đường tu kiếm đầy chông gai, từ tiểu trận đến trấn áp thiên kiêu.'
-        , NULL, N'ongoing', 4.50, NULL, 0
+        , NULL, N'ongoing', 4.50, NULL, 0, N'approved'
     );
     DECLARE @s1 INT = SCOPE_IDENTITY();
 
@@ -66,12 +72,12 @@ BEGIN
          N'Hắn tỉnh giấc, trong tay nắm chặt mảnh vải màu tro, trên vải thêu một chữ: Tường.');
 
     /* --------------------------- Truyện 2 --------------------------- */
-    INSERT INTO dbo.Stories (AuthorId, Title, Description, CoverUrl, Status, Rating, SourceUrl, IsDraft)
+    INSERT INTO dbo.Stories (AuthorId, Title, Description, CoverUrl, Status, Rating, SourceUrl, IsDraft, ModerationStatus)
     VALUES (
         @authorId,
         N'Phố Đèn Neon',
         N'Cậu sinh viên năm cuối đi giao hàng bằng xe đạp giữa thành phố không bao giờ ngủ. Một đêm, cậu gặp cô gái bán hoa ngồi khóc dưới đèn neon xanh — và cuộc đời cậu rẽ sang một hướng khác.'
-        , NULL, N'completed', 4.20, NULL, 0
+        , NULL, N'completed', 4.20, NULL, 0, N'approved'
     );
     DECLARE @s2 INT = SCOPE_IDENTITY();
 
@@ -88,12 +94,12 @@ BEGIN
          N'- Cậu có tin là đèn neon cũng biết buồn không? Cô hỏi. Huy không trả lời, chỉ nắm chặt tay cô hơn.');
 
     /* --------------------------- Truyện 3 --------------------------- */
-    INSERT INTO dbo.Stories (AuthorId, Title, Description, CoverUrl, Status, Rating, SourceUrl, IsDraft)
+    INSERT INTO dbo.Stories (AuthorId, Title, Description, CoverUrl, Status, Rating, SourceUrl, IsDraft, ModerationStatus)
     VALUES (
         @authorId,
         N'Hoàng Đạo Chi Tâm',
         N'Sau khi trời đất phân tách, mười hai hoàng đạo rơi xuống nhân gian. Người nắm giữ tâm của một hoàng đạo sẽ phải gánh chịu cả nghiệp lực của chòm sao ấy.'
-        , NULL, N'ongoing', 4.80, NULL, 0
+        , NULL, N'ongoing', 4.80, NULL, 0, N'approved'
     );
     DECLARE @s3 INT = SCOPE_IDENTITY();
 
@@ -110,12 +116,12 @@ BEGIN
          N'Chặng đường đầu tiên bắt đầu từ ngôi làng không có bóng trăng.');
 
     /* --------------------------- Truyện 4 --------------------------- */
-    INSERT INTO dbo.Stories (AuthorId, Title, Description, CoverUrl, Status, Rating, SourceUrl, IsDraft)
+    INSERT INTO dbo.Stories (AuthorId, Title, Description, CoverUrl, Status, Rating, SourceUrl, IsDraft, ModerationStatus)
     VALUES (
         @authorId,
         N'Xuyên Không Làm Giàu Ở Tống Triều',
         N'Một đầu bếp quán nhậu xuyên về thời Tống, mang theo công thức nước mắm và quyết tâm mở chuỗi tiệm ăn đầu tiên trong lịch sử.'
-        , NULL, N'ongoing', 4.10, NULL, 0
+        , NULL, N'ongoing', 4.10, NULL, 0, N'approved'
     );
     DECLARE @s4 INT = SCOPE_IDENTITY();
 
@@ -144,5 +150,21 @@ BEGIN
     VALUES (@s1, NULL, @readerId, N'Truyện đọc cuốn lắm, mong tác giả ra chương nhanh!');
 
     PRINT N'Đã nạp dữ liệu mẫu cho VietRead.';
+END
+GO
+
+/* ------------------ Admin mẫu cho MÔI TRƯỜNG PHÁT TRIỂN ------------------ */
+-- Idempotent: chạy lại chỉ thêm nếu email chưa có. Role='admin' để thử màn
+-- Kiểm duyệt. PasswordHash = bcrypt của mật khẩu demo chung "VietRead@123"
+-- (cùng hash 2 tài khoản trên).
+-- ⚠️  ĐỔI MẬT KHẨU NGAY (hoặc xoá tài khoản này) TRƯỚC KHI MỞ BACKEND
+--    RA NGOÀI MẠNG — xem backend/README.md → "Tạo tài khoản Admin".
+IF NOT EXISTS (SELECT 1 FROM dbo.Users WHERE Email = N'admin@vietread.vn')
+BEGIN
+    INSERT INTO dbo.Users (Name, Email, PasswordHash, Role, AvatarUrl)
+    VALUES (N'Admin VietRead', N'admin@vietread.vn',
+            N'$2b$12$n7kUwzeVzOoWwqU0XJgjxOrMOKPH59kvMm4d7ssFo1jyNQok2aw9y',
+            N'admin', NULL);
+    PRINT N'Đã tạo tài khoản admin mẫu admin@vietread.vn — ĐỔI MẬT KHẨU trước khi triển khai!';
 END
 GO

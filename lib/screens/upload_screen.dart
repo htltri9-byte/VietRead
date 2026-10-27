@@ -5,6 +5,7 @@ import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/error_state.dart';
+import '../widgets/moderation_chip.dart';
 import '../widgets/skeleton.dart';
 import 'auth_screen.dart';
 import 'chapter_manager_screen.dart';
@@ -16,7 +17,7 @@ import 'story_form_screen.dart';
 /// - Chưa đăng nhập → lời mời đăng nhập.
 /// - Danh sách lấy từ `GET /me/stories` (kể cả truyện nháp).
 /// - Mỗi dòng có menu: Sửa thông tin, Quản lý chương,
-///   Đăng công khai / Lưu làm nháp, Xoá truyện.
+///   Gửi duyệt / Gỡ xuống (theo trạng thái kiểm duyệt), Xoá truyện.
 /// - Đồng bộ phiên đăng nhập qua [AuthService] (đăng nhập ở tab khác
 ///   quay về đây vẫn thấy danh sách của mình).
 class UploadScreen extends StatefulWidget {
@@ -144,21 +145,59 @@ class _UploadScreenState extends State<UploadScreen> {
     if (mounted) _load();
   }
 
-  /// Đăng công khai (nháp → thật) hoặc lưu lại làm nháp (PUT isDraft).
-  Future<void> _toggleDraft(Story story) async {
+  /// GỬI DUYỆT: hiện hộp thoại xác nhận quyền đăng nội dung
+  /// ("tôi là tác giả hoặc có quyền đăng nội dung này") rồi
+  /// `POST /stories/{id}/submit` — thiếu xác nhận / thiếu điều kiện → 400.
+  Future<void> _submit(Story story) async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => const _RightsDialog(),
+    );
+    if (confirmed != true || !mounted) return;
+
     try {
       _api.setToken(AuthService.instance.session?.token);
-      await _api.updateStory(story.id, isDraft: !story.isDraft);
+      await _api.submitStory(story.id);
       _showMessage(
-        story.isDraft
-            ? 'Đã đăng "${story.title}" công khai.'
-            : 'Đã chuyển "${story.title}" về nháp.',
+        'Đã gửi "${story.title}" đi duyệt — truyện hiện công khai khi Admin duyệt.',
       );
       _load();
     } catch (e) {
-      _showMessage(
-        e is ApiException ? e.message : 'Không cập nhật được truyện.',
-      );
+      _showMessage(e is ApiException ? e.message : 'Không gửi được duyệt.');
+    }
+  }
+
+  /// GỠ truyện đã duyệt về nháp (approved → draft).
+  Future<void> _unpublish(Story story) async {
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: Text('Gỡ "${story.title}" xuống?'),
+        content: const Text(
+          'Truyện sẽ biến mất khỏi app công khai (về trạng thái nháp). '
+          'Bạn có thể gửi duyệt lại bất cứ lúc nào.',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Huỷ'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Gỡ xuống'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    try {
+      _api.setToken(AuthService.instance.session?.token);
+      await _api.unpublishStory(story.id);
+      _showMessage('Đã gỡ "${story.title}" về nháp.');
+      _load();
+    } catch (e) {
+      _showMessage(e is ApiException ? e.message : 'Không gỡ được truyện.');
     }
   }
 
@@ -260,7 +299,6 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   Widget _body(ThemeData theme) {
-    // Đang nạp lần đầu / của người dùng khác → skeleton (A2, Bước 11).
     if (_forUser != _currentUserId || (_loading && _stories.isEmpty)) {
       return const ListSkeleton();
     }
@@ -302,48 +340,58 @@ class _UploadScreenState extends State<UploadScreen> {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      if (story.isDraft) ...<Widget>[
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.secondary.withValues(
-                              alpha: 0.15,
-                            ),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Text(
-                            'Nháp',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.secondary,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ],
+                      const SizedBox(width: 8),
+                      ModerationChip(status: story.moderationStatus),
                     ],
                   ),
-                  subtitle: Text(
-                    <String>[
-                      story.chapterLabel,
-                      story.statusLabel,
-                      story.updatedLabel,
-                    ].join(' · '),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        <String>[
+                          story.chapterLabel,
+                          story.statusLabel,
+                          story.updatedLabel,
+                        ].join(' · '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      // Truyện bị từ chối → hiện rõ lý do để tác giả sửa.
+                      if (story.moderationStatus == 'rejected' &&
+                          (story.rejectReason ?? '').isNotEmpty)
+                        Text(
+                          'Lý do: ${story.rejectReason}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.error,
+                          ),
+                        ),
+                    ],
                   ),
                   trailing: PopupMenuButton<String>(
                     tooltip: 'Tuỳ chọn',
                     onSelected: (String action) {
                       if (action == 'edit') {
+                        // Đang chờ duyệt: sửa được nhưng báo rõ không đổi thứ tự.
+                        if (story.moderationStatus == 'pending') {
+                          _showMessage(
+                            'Truyện đang chờ duyệt — việc sửa không ảnh hưởng '
+                            'thứ tự xét duyệt.',
+                          );
+                        }
                         _editStory(story);
                       } else if (action == 'chapters') {
                         _openChapters(story);
-                      } else if (action == 'publish') {
-                        _toggleDraft(story);
+                      } else if (action == 'submit') {
+                        _submit(story);
+                      } else if (action == 'unpublish') {
+                        _unpublish(story);
+                      } else if (action == 'pending') {
+                        _showMessage(
+                          'Truyện đang chờ Admin duyệt — mọi chỉnh sửa không '
+                          'ảnh hưởng thứ tự xét duyệt.',
+                        );
                       } else {
                         _confirmDelete(story);
                       }
@@ -366,22 +414,40 @@ class _UploadScreenState extends State<UploadScreen> {
                               contentPadding: EdgeInsets.zero,
                             ),
                           ),
-                          PopupMenuItem<String>(
-                            value: 'publish',
-                            child: ListTile(
-                              leading: Icon(
-                                story.isDraft
-                                    ? Icons.publish_rounded
-                                    : Icons.unpublished_outlined,
+                          // Hành động theo trạng thái kiểm duyệt:
+                          // nháp/từ chối → Gửi duyệt; chờ duyệt → thông báo;
+                          // đã duyệt → Gỡ xuống.
+                          if (story.moderationStatus == 'approved')
+                            PopupMenuItem<String>(
+                              value: 'unpublish',
+                              child: ListTile(
+                                leading: const Icon(Icons.unpublished_outlined),
+                                title: const Text('Gỡ xuống'),
+                                contentPadding: EdgeInsets.zero,
                               ),
-                              title: Text(
-                                story.isDraft
-                                    ? 'Đăng công khai'
-                                    : 'Chuyển về nháp',
+                            )
+                          else if (story.moderationStatus == 'pending')
+                            const PopupMenuItem<String>(
+                              value: 'pending',
+                              child: ListTile(
+                                leading: Icon(Icons.schedule_rounded),
+                                title: Text('Đang chờ duyệt'),
+                                contentPadding: EdgeInsets.zero,
                               ),
-                              contentPadding: EdgeInsets.zero,
+                            )
+                          else
+                            PopupMenuItem<String>(
+                              value: 'submit',
+                              child: ListTile(
+                                leading: const Icon(Icons.publish_rounded),
+                                title: Text(
+                                  story.moderationStatus == 'rejected'
+                                      ? 'Gửi lại'
+                                      : 'Gửi duyệt',
+                                ),
+                                contentPadding: EdgeInsets.zero,
+                              ),
                             ),
-                          ),
                           const PopupMenuItem<String>(
                             value: 'delete',
                             child: ListTile(
@@ -397,6 +463,59 @@ class _UploadScreenState extends State<UploadScreen> {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// Hộp thoại **xác nhận quyền** khi gửi duyệt: phải tích
+/// "Tôi là tác giả hoặc có quyền đăng nội dung này" thì nút Gửi duyệt mới bật
+/// (khớp yêu cầu `confirmRights = true` của `POST /stories/{id}/submit`).
+class _RightsDialog extends StatefulWidget {
+  const _RightsDialog();
+
+  @override
+  State<_RightsDialog> createState() => _RightsDialogState();
+}
+
+class _RightsDialogState extends State<_RightsDialog> {
+  bool _confirmed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+
+    return AlertDialog(
+      title: const Text('Gửi truyện đi duyệt'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            'Truyện sẽ được Admin xem xét trước khi hiện công khai trên app. '
+            'Trong lúc chờ duyệt bạn vẫn sửa được truyện.',
+            style: theme.textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 12),
+          CheckboxListTile(
+            value: _confirmed,
+            onChanged: (bool? v) => setState(() => _confirmed = v ?? false),
+            title: const Text('Tôi là tác giả hoặc có quyền đăng nội dung này'),
+            controlAffinity: ListTileControlAffinity.leading,
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+        ],
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Huỷ'),
+        ),
+        FilledButton(
+          onPressed: _confirmed ? () => Navigator.of(context).pop(true) : null,
+          child: const Text('Gửi duyệt'),
+        ),
+      ],
     );
   }
 }

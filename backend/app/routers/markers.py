@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from .. import alternatives, security, vietphrase
 from ..database import get_db
+from ..moderation import mark_needs_recheck
 from ..models import (
     Chapter,
     ChapterRevision,
@@ -124,6 +125,7 @@ def clean_markers(
         )
 
     story.updated_at = utc_now()
+    mark_needs_recheck(story)   # approved → Admin cần xem lại nội dung đã đổi
     db.commit()
 
     target = (

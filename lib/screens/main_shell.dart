@@ -64,7 +64,7 @@ class _MainShellState extends State<MainShell> {
     LibraryScreen(api: widget.api, shellTab: _tabNotifier),
     UploadScreen(api: widget.api),
     // "Truyện của tôi" ở tab Tài khoản → nhảy sang tab Đăng truyện (Bước 9).
-    ProfileScreen(onOpenMyStories: () => _onTap(2)),
+    ProfileScreen(onOpenMyStories: () => _onTap(2), api: widget.api),
   ];
 
   /// Chuyển tab khi chạm vào mục trong thanh nav.

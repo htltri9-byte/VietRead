@@ -5,6 +5,7 @@ import '../models/comment.dart';
 import '../models/genre.dart';
 import '../models/glossary.dart';
 import '../models/import_job.dart';
+import '../models/moderation.dart';
 import '../models/story.dart';
 import '../models/story_word.dart';
 import '../models/user.dart';
@@ -205,6 +206,10 @@ class MockApiService implements ApiService {
     rating: mock.rating,
     chapterCount: mock.chapterCount,
     isDraft: mock.isDraft,
+    moderationStatus: mock.moderationStatus,
+    rejectReason: mock.rejectReason,
+    needsRecheck: mock.needsRecheck,
+    submittedAt: mock.submittedAt,
     updatedAt: DateTime.now().subtract(mock.updatedAgo),
   );
 
@@ -248,8 +253,10 @@ class MockApiService implements ApiService {
       result = result.where((_MockStory s) => s.status == st);
     }
 
-    // Danh sách công khai luôn loại truyện nháp (giống backend).
-    result = result.where((_MockStory s) => !s.isDraft);
+    // Danh sách công khai chỉ chứa truyện ĐÃ DUYỆT (giống backend).
+    result = result.where(
+      (_MockStory s) => s.moderationStatus == 'approved',
+    );
 
     // --- Sắp xếp (cùng giá trị sort với backend) ---
     final List<_MockStory> sorted = result.toList();
@@ -435,6 +442,9 @@ class MockApiService implements ApiService {
   final Map<String, String> _passwords = <String, String>{
     'tacgia@vietread.vn': 'VietRead@123',
     'docgia@vietread.vn': 'VietRead@123',
+    // Admin demo cho màn Kiểm duyệt (giống admin mẫu của seed.sql —
+    // chỉ tài khoản DEV; production tạo bằng backend/tools/create_admin.py).
+    'admin@vietread.vn': 'VietRead@123',
   };
 
   int _nextUserId = 100;
@@ -508,15 +518,18 @@ class MockApiService implements ApiService {
   AuthResult _issue(String email, {String? name}) {
     // 2 tài khoản demo dùng id cố định khớp seed.sql (tacgia=1, docgia=2)
     // để "Truyện của tôi" (Bước 9) thấy đúng truyện mình là tác giả.
+    // Admin demo id=50 — không trùng authorId nào của seed.
     final int id = switch (email) {
       'tacgia@vietread.vn' => 1,
       'docgia@vietread.vn' => 2,
+      'admin@vietread.vn' => 50,
       _ => _nextUserId++,
     };
     final User user = User(
       id: id,
       name: name ?? email.split('@').first,
       email: email,
+      role: email == 'admin@vietread.vn' ? 'admin' : 'user',
     );
     _token = 'mock-token-${user.id}';
     _me = user;
@@ -734,6 +747,7 @@ class MockApiService implements ApiService {
             'Một thiếu niên bước lên con đường tu hành, trải qua gió mưa, '
             'cuối cùng trở thành một đời tông sư.',
         isDraft: true,
+        moderationStatus: 'draft',
       ),
     );
     _chaptersByStory[storyId] = <Chapter>[
@@ -773,12 +787,26 @@ class MockApiService implements ApiService {
     }
   }
 
-  /// Truyện nháp chỉ chủ nhân xem được — người khác/khách → 404 (backend).
+  /// Truyện CHƯA duyệt chỉ chủ truyện và admin xem được — người khác/khách → 404.
   void _requireViewable(_MockStory mock) {
-    if (!mock.isDraft) return;
-    if (_me == null || mock.authorId != _me!.id) {
+    if (mock.moderationStatus == 'approved') return;
+    if (_me == null ||
+        (mock.authorId != _me!.id && _me!.role != 'admin')) {
       throw const ApiException('Không tìm thấy truyện', statusCode: 404);
     }
+  }
+
+  /// Chỉ admin mới dùng được endpoint /admin/* (401 khi chưa đăng nhập,
+  /// 403 khi đã đăng nhập nhưng không phải admin) — giống backend.
+  User _requireAdmin() {
+    final User me = _requireLogin();
+    if (me.role != 'admin') {
+      throw const ApiException(
+        'Chỉ admin mới dùng được chức năng này',
+        statusCode: 403,
+      );
+    }
+    return me;
   }
 
   /// Chuỗi rỗng / toàn khoảng trắng → null; cắt khoảng trắng hai đầu.
@@ -849,7 +877,9 @@ class MockApiService implements ApiService {
       hot: 0,
       description: _nullIfEmpty(description),
       coverUrl: _nullIfEmpty(coverUrl),
-      isDraft: isDraft,
+      // Backend luôn tạo truyện ở trạng thái draft — gửi duyệt mới công khai.
+      isDraft: true,
+      moderationStatus: 'draft',
     );
     _stories.insert(0, mock);
     return _toStory(mock);
@@ -895,7 +925,23 @@ class MockApiService implements ApiService {
       mock.status = status;
     }
     if (genres != null) mock.genres = _cleanGenres(genres);
-    if (isDraft != null) mock.isDraft = isDraft;
+    if (isDraft != null) {
+      // Tương thích client cũ: isDraft=true = "không công khai" (gỡ nếu đang
+      // approved); isDraft=false = "Đăng công khai" cũ → 400 hướng dẫn dùng
+      // POST /stories/{id}/submit (giống backend).
+      if (isDraft) {
+        if (mock.moderationStatus == 'approved') {
+          _ensureTransition(mock, 'draft');
+          _setModeration(mock, 'draft');
+        }
+      } else if (mock.moderationStatus != 'approved') {
+        throw const ApiException(
+          'Truyện cần được Admin duyệt trước khi công khai — dùng "Gửi duyệt" '
+          '(POST /stories/{id}/submit)',
+          statusCode: 400,
+        );
+      }
+    }
     mock.updatedAgo = Duration.zero;
     return _toStory(mock);
   }
@@ -1009,6 +1055,7 @@ class MockApiService implements ApiService {
     chapters.add(chapter);
     mock.chapterCount = chapters.length;
     mock.updatedAgo = Duration.zero; // backend cũng bump UpdatedAt
+    _flagRecheck(mock, changedChapterId: chapter.id); // approved → Admin xem lại
     return chapter;
   }
 
@@ -1071,6 +1118,7 @@ class MockApiService implements ApiService {
     final List<Chapter> siblings = _chaptersByStory[found.storyId]!;
     siblings[siblings.indexOf(found)] = updated;
     mock.updatedAgo = Duration.zero;
+    _flagRecheck(mock, changedChapterId: updated.id);
     return updated;
   }
 
@@ -1084,6 +1132,376 @@ class MockApiService implements ApiService {
     siblings.remove(found);
     mock.chapterCount = siblings.length;
     mock.updatedAgo = Duration.zero;
+    _flagRecheck(mock);
+  }
+
+  // ------------------------- Kiểm duyệt (Admin) -------------------------
+
+  /// Chuyển trạng thái hợp lệ — khớp VALID_TRANSITIONS của backend;
+  /// chuyển khác → 409 (idempotent, không ghi đè lẫn nhau).
+  static const Map<String, Set<String>> _transitions = <String, Set<String>>{
+    'draft': <String>{'pending'},
+    'pending': <String>{'approved', 'rejected'},
+    'rejected': <String>{'pending'},
+    'approved': <String>{'draft', 'rejected'},
+  };
+
+  void _ensureTransition(_MockStory mock, String target) {
+    if (!_transitions[mock.moderationStatus]!.contains(target)) {
+      throw ApiException(
+        "Không thể chuyển trạng thái '${mock.moderationStatus}' → '$target'",
+        statusCode: 409,
+      );
+    }
+  }
+
+  /// Chuyển trạng thái + giữ đồng bộ `isDraft` (approved ⇔ isDraft=false).
+  void _setModeration(
+    _MockStory mock,
+    String status, {
+    String? rejectReason,
+    bool clearReason = false,
+    bool? needsRecheck,
+  }) {
+    mock.moderationStatus = status;
+    mock.isDraft = status != 'approved';
+    if (clearReason) mock.rejectReason = null;
+    if (rejectReason != null) mock.rejectReason = rejectReason;
+    if (needsRecheck != null) mock.needsRecheck = needsRecheck;
+  }
+
+  /// Truyện approved bị sửa/thêm/xoá chương → đặt cờ Admin xem lại
+  /// (giống mark_needs_recheck của backend; các trạng thái khác giữ nguyên).
+  /// Truyền `changedChapterId` khi biết chương vừa đổi — màn Chi tiết kiểm
+  /// duyệt chỉ liệt kê chương trong `changedChapterIds`.
+  void _flagRecheck(_MockStory mock, {int? changedChapterId}) {
+    if (mock.moderationStatus == 'approved') mock.needsRecheck = true;
+    if (changedChapterId != null) mock.changedChapterIds.add(changedChapterId);
+  }
+
+  /// Điều kiện gửi duyệt — trả về danh sách lý do thiếu (rỗng = đạt).
+  static List<String> _submitErrors(_MockStory mock) {
+    final List<String> errors = <String>[];
+    if (mock.title.trim().isEmpty) errors.add('truyện cần có tên');
+    if ((mock.description ?? '').trim().isEmpty) {
+      errors.add('truyện cần có mô tả');
+    }
+    if (mock.genres.isEmpty) errors.add('truyện cần có ít nhất 1 thể loại');
+    if (mock.chapterCount < 1) errors.add('truyện cần có ít nhất 1 chương');
+    return errors;
+  }
+
+  AdminStory _toAdminStory(_MockStory mock) => AdminStory(
+    id: mock.id,
+    title: mock.title,
+    coverUrl: mock.coverUrl,
+    author: mock.author,
+    chapterCount: mock.chapterCount,
+    moderationStatus: mock.moderationStatus,
+    rejectReason: mock.rejectReason,
+    needsRecheck: mock.needsRecheck,
+    submittedAt: mock.submittedAt,
+    reviewedAt: mock.reviewedAt,
+    scanStatus: null, // mock chưa chạy quét — ẩn khối "Kết quả quét tự động"
+  );
+
+  /// Danh sách chương cho màn chi tiết kiểm duyệt (không materialize).
+  List<ChapterSummary> _chapterSummariesOf(_MockStory mock) {
+    final DateTime now = DateTime.now();
+    final DateTime? reviewedAt = mock.reviewedAt;
+
+    /// `updatedAt` bám mốc duyệt: chương thay đổi sau lần duyệt gần nhất →
+    /// sau `reviewedAt`; chương giữ nguyên → trước `reviewedAt` (đúng kiểu so
+    /// sánh `updatedAt > ReviewedAt` của backend). Chưa từng duyệt → giữ giá
+    /// trị cũ.
+    DateTime stampOf(int chapterId, DateTime fallback) {
+      if (reviewedAt == null) return fallback;
+      if (!mock.changedChapterIds.contains(chapterId)) {
+        return reviewedAt.subtract(const Duration(seconds: 1));
+      }
+      return now.isAfter(reviewedAt)
+          ? now
+          : reviewedAt.add(const Duration(seconds: 1));
+    }
+
+    final List<Chapter>? custom = _chaptersByStory[mock.id];
+    if (custom != null) {
+      final List<Chapter> sorted = List<Chapter>.of(custom)
+        ..sort((Chapter a, Chapter b) => a.index.compareTo(b.index));
+      return sorted
+          .map(
+            (Chapter c) => ChapterSummary(
+              id: c.id,
+              storyId: c.storyId,
+              index: c.index,
+              title: c.title,
+              updatedAt: stampOf(c.id, now),
+            ),
+          )
+          .toList(growable: false);
+    }
+    return List<ChapterSummary>.generate(mock.chapterCount, (int i) {
+      final int index = i + 1;
+      final int id = chapterIdOf(mock.id, index);
+      return ChapterSummary(
+        id: id,
+        storyId: mock.id,
+        index: index,
+        title:
+            'Chương $index: ${_chapterTitles[(index - 1) % _chapterTitles.length]}',
+        updatedAt: stampOf(
+          id,
+          now.subtract(Duration(days: mock.chapterCount - index)),
+        ),
+      );
+    });
+  }
+
+  @override
+  Future<Story> submitStory(int storyId) async {
+    await _wait();
+    final _MockStory mock = _storyOrThrow(storyId);
+    _requireOwner(mock); // 401 khi chưa đăng nhập, 403 khi khác chủ
+    final List<String> errors = _submitErrors(mock);
+    if (errors.isNotEmpty) {
+      throw ApiException(
+        'Chưa đủ điều kiện gửi duyệt: ${errors.join('; ')}',
+        statusCode: 400,
+      );
+    }
+    _ensureTransition(mock, 'pending'); // đã pending/approved → 409
+    _setModeration(mock, 'pending', clearReason: true);
+    mock.submittedAt = DateTime.now();
+    mock.updatedAgo = Duration.zero;
+    return _toStory(mock);
+  }
+
+  @override
+  Future<Story> unpublishStory(int storyId) async {
+    await _wait();
+    final _MockStory mock = _storyOrThrow(storyId);
+    _requireOwner(mock);
+    _ensureTransition(mock, 'draft'); // chỉ approved → draft; còn lại → 409
+    _setModeration(mock, 'draft');
+    mock.updatedAgo = Duration.zero;
+    return _toStory(mock);
+  }
+
+  @override
+  Future<List<AdminStory>> fetchAdminStories({
+    required String status,
+    String? query,
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    await _wait();
+    _requireAdmin();
+    final String key = status.trim().toLowerCase();
+    Iterable<_MockStory> result = _stories;
+    switch (key) {
+      case 'pending':
+        result = result.where((_MockStory s) => s.moderationStatus == 'pending');
+      case 'approved':
+        result = result.where((_MockStory s) => s.moderationStatus == 'approved');
+      case 'rejected':
+        result = result.where((_MockStory s) => s.moderationStatus == 'rejected');
+      case 'draft':
+        result = result.where((_MockStory s) => s.moderationStatus == 'draft');
+      case 'recheck':
+        result = result.where(
+          (_MockStory s) =>
+              s.moderationStatus == 'approved' && s.needsRecheck,
+        );
+      case 'all':
+        break;
+      default:
+        throw const ApiException(
+          'status phải là pending | approved | rejected | draft | recheck | all',
+          statusCode: 400,
+        );
+    }
+    final String q = (query ?? '').trim().toLowerCase();
+    if (q.isNotEmpty) {
+      result = result.where(
+        (_MockStory s) =>
+            s.title.toLowerCase().contains(q) ||
+            s.author.toLowerCase().contains(q),
+      );
+    }
+    final List<_MockStory> sorted = result.toList();
+    if (key == 'pending') {
+      // Chờ duyệt cũ nhất trước (SubmittedAt tăng dần).
+      sorted.sort(
+        (_MockStory a, _MockStory b) =>
+            (a.submittedAt ?? DateTime(0))
+                .compareTo(b.submittedAt ?? DateTime(0)),
+      );
+    } else {
+      sorted.sort(
+        (_MockStory a, _MockStory b) => a.updatedAgo.compareTo(b.updatedAgo),
+      );
+    }
+    final int start = max(0, (page - 1) * pageSize);
+    if (start >= sorted.length) return <AdminStory>[];
+    final int end = min(sorted.length, start + pageSize);
+    return sorted
+        .sublist(start, end)
+        .map(_toAdminStory)
+        .toList(growable: false);
+  }
+
+  @override
+  Future<AdminStoryDetail> fetchAdminStory(int storyId) async {
+    await _wait();
+    _requireAdmin();
+    final _MockStory mock = _storyOrThrow(storyId);
+    return AdminStoryDetail(
+      story: _toAdminStory(mock),
+      description: mock.description,
+      genres: List<String>.of(mock.genres),
+      originalAuthor: mock.originalAuthor,
+      uploaderName: mock.author,
+      chapters: _chapterSummariesOf(mock),
+    );
+  }
+
+  @override
+  Future<AdminChapter> fetchAdminChapter(int chapterId) async {
+    await _wait();
+    _requireAdmin();
+    final Chapter? custom = _findCustomChapter(chapterId);
+    if (custom != null) {
+      return AdminChapter(
+        id: custom.id,
+        storyId: custom.storyId,
+        index: custom.index,
+        title: custom.title,
+        content: resolveMarkers(custom.content),
+      );
+    }
+    final int storyId = chapterId ~/ 1000;
+    final int index = chapterId % 1000;
+    final _MockStory? mock = _mockById(storyId);
+    if (mock == null || index < 1 || index > mock.chapterCount) {
+      throw const ApiException('Không tìm thấy chương', statusCode: 404);
+    }
+    return AdminChapter(
+      id: chapterId,
+      storyId: storyId,
+      index: index,
+      title:
+          'Chương $index: ${_chapterTitles[(index - 1) % _chapterTitles.length]}',
+      content: resolveMarkers(_mockContent(mock, index)),
+    );
+  }
+
+  @override
+  Future<void> approveAdminStory(int storyId) async {
+    await _wait();
+    _requireAdmin();
+    final _MockStory mock = _storyOrThrow(storyId);
+    final bool canApprove =
+        mock.moderationStatus == 'pending' ||
+        (mock.moderationStatus == 'approved' && mock.needsRecheck);
+    if (!canApprove) {
+      throw ApiException(
+        "Truyện không ở trạng thái chờ duyệt (hiện tại: "
+        "'${mock.moderationStatus}') — admin khác có thể đã xử lý trước",
+        statusCode: 409,
+      );
+    }
+    _setModeration(mock, 'approved', clearReason: true, needsRecheck: false);
+    mock.reviewedAt = DateTime.now(); // mốc ReviewedAt — chương "đổi" sau mốc này
+    mock.changedChapterIds.clear();   // duyệt xong → hết chương cần xem lại
+    mock.updatedAgo = Duration.zero;
+  }
+
+  @override
+  Future<void> rejectAdminStory(int storyId, {required String reason}) async {
+    await _wait();
+    _requireAdmin();
+    final String clean = reason.trim();
+    if (clean.length < 5) {
+      throw const ApiException(
+        'Lý do từ chối cần ít nhất 5 ký tự',
+        statusCode: 400,
+      );
+    }
+    if (clean.length > 1000) {
+      throw const ApiException(
+        'Lý do từ chối tối đa 1000 ký tự',
+        statusCode: 400,
+      );
+    }
+    final _MockStory mock = _storyOrThrow(storyId);
+    if (mock.moderationStatus != 'pending' &&
+        mock.moderationStatus != 'approved') {
+      throw ApiException(
+        "Truyện không ở trạng thái chờ duyệt/đã duyệt (hiện tại: "
+        "'${mock.moderationStatus}') — admin khác có thể đã xử lý trước",
+        statusCode: 409,
+      );
+    }
+    _setModeration(
+      mock,
+      'rejected',
+      rejectReason: clean,
+      needsRecheck: false,
+    );
+    mock.reviewedAt = DateTime.now(); // backend cũng ghi ReviewedAt khi từ chối
+    mock.changedChapterIds.clear();
+    mock.updatedAgo = Duration.zero;
+  }
+
+  @override
+  Future<AdminStats> fetchAdminStats() async {
+    await _wait();
+    _requireAdmin();
+    int draft = 0, pending = 0, approved = 0, rejected = 0, recheck = 0;
+    for (final _MockStory s in _stories) {
+      switch (s.moderationStatus) {
+        case 'draft':
+          draft += 1;
+        case 'pending':
+          pending += 1;
+        case 'approved':
+          approved += 1;
+          if (s.needsRecheck) recheck += 1;
+        case 'rejected':
+          rejected += 1;
+      }
+    }
+    return AdminStats(
+      draft: draft,
+      pending: pending,
+      approved: approved,
+      rejected: rejected,
+      needsRecheck: recheck,
+    );
+  }
+
+  /// Đặt trạng thái kiểm duyệt của một truyện — fixture cho widget test
+  /// (cùng mục đích với các resetForTest; cố ý không @visibleForTesting
+  /// để tool/check_real_api.dart vẫn import được — xem resetStoriesForTest).
+  static void setModerationForTest(
+    int storyId,
+    String status, {
+    String? rejectReason,
+    bool needsRecheck = false,
+    DateTime? submittedAt,
+    DateTime? reviewedAt,
+  }) {
+    for (final _MockStory s in _stories) {
+      if (s.id != storyId) continue;
+      s.moderationStatus = status;
+      s.isDraft = status != 'approved';
+      s.rejectReason = rejectReason;
+      s.needsRecheck = needsRecheck;
+      s.submittedAt = submittedAt;
+      s.reviewedAt = reviewedAt;
+      s.changedChapterIds.clear();
+      return;
+    }
   }
 
   // ------------------------- Nhập truyện từ link (Bước 10) ------------------
@@ -1202,6 +1620,7 @@ class MockApiService implements ApiService {
     _materializeChapters(mock).add(chapter);
     mock.chapterCount = _chaptersByStory[mock.id]!.length;
     mock.updatedAgo = Duration.zero;
+    _flagRecheck(mock, changedChapterId: chapter.id); // backend: import cũng đánh dấu
     return chapter;
   }
 
@@ -1873,6 +2292,7 @@ class _MockStory {
     this.coverUrl,
     this.originalAuthor,
     this.isDraft = false,
+    this.moderationStatus = 'approved',
   });
 
   final int id;
@@ -1896,6 +2316,26 @@ class _MockStory {
   String? description;
   String? coverUrl; // ảnh bìa người dùng nhập (null = theo cờ useCoverImages)
   bool isDraft;
+
+  // ---------------- Kiểm duyệt (bám theo ModerationStatus của backend) -------
+  // draft | pending | approved | rejected — đồng bộ với isDraft:
+  // isDraft = (moderationStatus != 'approved').
+  String moderationStatus;
+
+  /// Không nhận qua constructor (không truyện nào khởi tạo sẵn với các giá trị
+  /// này) — chỉ set qua `_setModeration` / `setModerationForTest`.
+  String? rejectReason;
+  bool needsRecheck = false;
+  DateTime? submittedAt;
+
+  /// Lúc Admin duyệt/từ chối gần nhất (`ReviewedAt` của backend) — màn Chi
+  /// tiết kiểm duyệt dùng mốc này để lọc "chương thay đổi sau lần duyệt".
+  DateTime? reviewedAt;
+
+  /// Id chương bị thêm/sửa SAU lần duyệt gần nhất. Backend tự so sánh
+  /// `updatedAt > ReviewedAt`; mock ghi rõ id chương nào "đổi" để lọc được
+  /// đúng như vậy (chương đã duyệt không hiện lại ở màn Chi tiết kiểm duyệt).
+  final Set<int> changedChapterIds = <int>{};
 }
 
 /// Batch thay thế gần nhất của một truyện — mô phỏng `ChapterRevisions`

@@ -334,10 +334,14 @@ void main() {
         () async {
       final MockApiService mock = api();
       await mock.login('tacgia@vietread.vn', 'VietRead@123');
-      await mock.createStory(
+      final Story created = await mock.createStory(
         title: 'Truyện Có Tác Giả',
         originalAuthor: 'Hàn Mặc Kiếm',
       );
+      // Truyện mới tạo là nháp → CHƯA xuất hiện ở tìm kiếm công khai.
+      expect(await mock.fetchStories(query: 'Hàn Mặc Kiếm'), isEmpty);
+      // Sau khi Admin duyệt (mock: đặt trạng thái) thì tìm thấy.
+      MockApiService.setModerationForTest(created.id, 'approved');
 
       final List<Story> byAuthor = await mock.fetchStories(query: 'Hàn Mặc Kiếm');
       expect(byAuthor, hasLength(1));

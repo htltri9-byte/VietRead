@@ -61,10 +61,12 @@ def list_my_follows(
         .order_by(Follow.created_at.desc())
     ).scalars().all()
 
-    # Giữ nguyên thứ tự created_at.desc() và bỏ truyện đã bị xoá / còn là nháp.
+    # Giữ nguyên thứ tự created_at.desc() và bỏ truyện đã bị xoá / CHƯA duyệt
+    # (chỉ truyện approved mới hiện với tư cách công khai — cùng điều kiện với
+    # get_story_or_404 qua moderation.can_view).
     stories: list[Story] = []
     for story_id in story_ids:
         story = db.get(Story, story_id)
-        if story is not None and not story.is_draft:
+        if story is not None and story.moderation_status == "approved":
             stories.append(story)
     return story_outs(db, stories)

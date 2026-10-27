@@ -41,6 +41,7 @@ from ..services.scraper import (
     qidian_chapter_id,
 )
 from ..services.translator import TranslationError, translate_text
+from ..moderation import mark_needs_recheck
 from .stories import get_owned_story, utc_now
 
 router = APIRouter(tags=["chapters"])
@@ -289,6 +290,7 @@ def import_chapter_from_url(
         story.source_book_id = book_id
         story.source_url = f"https://m.qidian.com/book/{book_id}/"
     story.updated_at = utc_now()  # mục "Mới cập nhật" + số chương (COUNT) tự đúng
+    mark_needs_recheck(story)     # approved → Admin nên xem lại chương mới
     _commit_or_conflict(db)
     db.refresh(chapter)
     logger.info(
@@ -356,6 +358,7 @@ def import_chapter_from_text(
     )
     db.add(chapter)
     story.updated_at = utc_now()
+    mark_needs_recheck(story)     # approved → Admin nên xem lại chương mới
     _commit_or_conflict(db)
     db.refresh(chapter)
     logger.info("Thêm chương dán văn bản vào story=%s: chương %s", story_id, index)

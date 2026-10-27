@@ -31,6 +31,8 @@ CREATE TABLE dbo.Users (
     Email        NVARCHAR(255)  NOT NULL,
     PasswordHash NVARCHAR(255)  NOT NULL,
     AvatarUrl    NVARCHAR(500)  NULL,
+    -- Vai trò: 'user' | 'admin' (admin mới tạo qua backend/tools/create_admin.py)
+    Role         NVARCHAR(20)   NOT NULL CONSTRAINT DF_Users_Role DEFAULT (N'user'),
     CreatedAt    DATETIME2      NOT NULL CONSTRAINT DF_Users_CreatedAt DEFAULT (SYSUTCDATETIME()),
     CONSTRAINT PK_Users PRIMARY KEY (Id),
     CONSTRAINT UQ_Users_Email UNIQUE (Email)
@@ -63,10 +65,25 @@ CREATE TABLE dbo.Stories (
     -- Tên gốc chữ Trung của tác giả (nếu lấy được từ nguồn, vd Qidian)
     OriginalAuthorRaw NVARCHAR(200) NULL,
     IsDraft     BIT            NOT NULL CONSTRAINT DF_Stories_IsDraft DEFAULT (0),
+    -- Kiểm duyệt trước khi công khai — draft | pending | approved | rejected
+    -- QUY TẮC NHẤT QUÁN: IsDraft = 0 CHỈ khi ModerationStatus = 'approved'
+    -- (code giữ đồng bộ ở mọi chỗ chuyển trạng thái — xem app/routers/moderation.py)
+    ModerationStatus NVARCHAR(20) NOT NULL CONSTRAINT DF_Stories_ModerationStatus DEFAULT (N'draft'),
+    RejectReason     NVARCHAR(1000) NULL,   -- lý do Admin từ chối (5–1000 ký tự)
+    SubmittedAt      DATETIME2      NULL,   -- lúc chủ truyện gửi duyệt
+    ReviewedAt       DATETIME2      NULL,   -- lúc Admin duyệt/từ chối gần nhất
+    ReviewedBy       INT            NULL,   -- Admin duyệt/từ chối
+    -- Truyện đã duyệt nhưng chủ truyện sửa/thêm chương → Admin nên xem lại
+    NeedsRecheck     BIT            NOT NULL CONSTRAINT DF_Stories_NeedsRecheck DEFAULT (0),
+    -- Chỗ dành cho dịch vụ quét nội dung TỰ ĐỘNG sau này (giai đoạn này chỉ tạo cột,
+    -- chưa có logic quét): none | clean | flagged | error, ScanSummary = JSON
+    ScanStatus       NVARCHAR(20)   NULL,
+    ScanSummary      NVARCHAR(MAX)  NULL,
     CreatedAt   DATETIME2      NOT NULL CONSTRAINT DF_Stories_CreatedAt DEFAULT (SYSUTCDATETIME()),
     UpdatedAt   DATETIME2      NOT NULL CONSTRAINT DF_Stories_UpdatedAt DEFAULT (SYSUTCDATETIME()),
     CONSTRAINT PK_Stories PRIMARY KEY (Id),
-    CONSTRAINT FK_Stories_AuthorId FOREIGN KEY (AuthorId) REFERENCES dbo.Users(Id)
+    CONSTRAINT FK_Stories_AuthorId FOREIGN KEY (AuthorId) REFERENCES dbo.Users(Id),
+    CONSTRAINT FK_Stories_ReviewedBy FOREIGN KEY (ReviewedBy) REFERENCES dbo.Users(Id)
 );
 GO
 
@@ -253,9 +270,30 @@ CREATE TABLE dbo.UserMarkRules (
 );
 GO
 
+/* --------------------------- ModerationLog ---------------------------- */
+-- Mỗi lần Admin duyệt/từ chối/gỡ truyện sẽ ghi một dòng ở đây
+-- (bảng mới — migrate_moderation.sql)
+CREATE TABLE dbo.ModerationLog (
+    Id        INT IDENTITY(1,1) NOT NULL,
+    StoryId   INT           NOT NULL,
+    AdminId   INT           NOT NULL,
+    Action    NVARCHAR(20)  NOT NULL,          -- approve | reject | unpublish
+    Reason    NVARCHAR(1000) NULL,
+    CreatedAt DATETIME2     NOT NULL CONSTRAINT DF_ModerationLog_CreatedAt
+                    DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_ModerationLog PRIMARY KEY (Id),
+    CONSTRAINT FK_ModerationLog_StoryId FOREIGN KEY (StoryId)
+        REFERENCES dbo.Stories(Id) ON DELETE CASCADE,
+    CONSTRAINT FK_ModerationLog_AdminId FOREIGN KEY (AdminId)
+        REFERENCES dbo.Users(Id)
+);
+GO
+
 /* ------------------------------ Index ------------------------------ */
 -- Danh sách truyện của một tác giả (trang "Truyện của tôi")
 CREATE INDEX IX_Stories_AuthorId ON dbo.Stories (AuthorId);
+-- Lọc theo trạng thái kiểm duyệt (màn Kiểm duyệt / chỉ truyện approved lên app)
+CREATE INDEX IX_Stories_ModerationStatus ON dbo.Stories (ModerationStatus, SubmittedAt);
 -- Sắp xếp "Mới cập nhật"
 CREATE INDEX IX_Stories_UpdatedAt ON dbo.Stories (UpdatedAt DESC);
 -- Ô tìm kiếm theo tên (LIKE N'%...%')
@@ -280,6 +318,8 @@ CREATE INDEX IX_StoryGlossary_StoryId ON dbo.StoryGlossary (StoryId);
 -- Batch hoàn tác gần nhất: lọc theo truyện / chương
 CREATE INDEX IX_ChapterRevisions_StoryId ON dbo.ChapterRevisions (StoryId);
 CREATE INDEX IX_ChapterRevisions_ChapterId ON dbo.ChapterRevisions (ChapterId);
+-- Lịch sử kiểm duyệt theo truyện
+CREATE INDEX IX_ModerationLog_StoryId ON dbo.ModerationLog (StoryId);
 -- Từ điển cá nhân của một người dùng
 CREATE INDEX IX_DictionaryWords_UserId ON dbo.DictionaryWords (UserId);
 -- Nghĩa đã chọn / từ bỏ hỏi theo truyện: UNIQUE (StoryId, SourceKey) đã tạo

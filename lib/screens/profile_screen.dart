@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../models/moderation.dart';
+import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import 'auth_screen.dart';
+import 'moderation_screen.dart';
 
 /// Tab "Tài khoản" (A3.11): đăng nhập / đăng ký, thông tin người dùng,
 /// mục "Truyện của tôi", cài đặt và đăng xuất.
@@ -9,11 +12,15 @@ import 'auth_screen.dart';
 /// Trạng thái lấy từ [AuthService.instance] — nghe thay đổi qua
 /// [AnimatedBuilder] nên tự dựng lại khi đăng nhập / đăng xuất.
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key, this.onOpenMyStories});
+  const ProfileScreen({super.key, this.onOpenMyStories, this.api});
 
   /// Chuyển sang tab "Đăng truyện" khi bấm mục "Truyện của tôi"
   /// (MainShell truyền vào — tab đã có sẵn danh sách của tác giả, Bước 9).
   final VoidCallback? onOpenMyStories;
+
+  /// Tiêm nguồn dữ liệu (test dùng mock, app thật dùng HTTP) — dùng cho
+  /// mục "Kiểm duyệt truyện" (nạp badge số truyện chờ duyệt).
+  final ApiService? api;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -64,6 +71,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           return auth.isLoggedIn
               ? _LoggedInBody(
                   auth: auth,
+                  api: widget.api,
                   loggingOut: _loggingOut,
                   onLogout: _logout,
                   onComingSoon: _comingSoon,
@@ -145,9 +153,11 @@ class _LoggedInBody extends StatelessWidget {
     required this.onLogout,
     required this.onComingSoon,
     this.onOpenMyStories,
+    this.api,
   });
 
   final AuthService auth;
+  final ApiService? api;
   final bool loggingOut;
   final VoidCallback onLogout;
   final void Function(String) onComingSoon;
@@ -219,6 +229,11 @@ class _LoggedInBody extends StatelessWidget {
                 // Có callback (Bước 9) → mở tab Đăng truyện; không thì báo chưa làm.
                 onTap: onOpenMyStories ?? () => onComingSoon('Truyện của tôi'),
               ),
+              // Chỉ admin thấy mục này (người thường không có badge).
+              if (auth.user?.isAdmin == true) ...<Widget>[
+                const Divider(height: 1),
+                _ModerationMenuTile(api: api),
+              ],
               const Divider(height: 1),
               ListTile(
                 leading: Icon(Icons.tune_rounded, color: scheme.primary),
@@ -244,6 +259,82 @@ class _LoggedInBody extends StatelessWidget {
           label: const Text('Đăng xuất'),
         ),
       ],
+    );
+  }
+}
+
+/// Mục menu **"Kiểm duyệt truyện"** (chỉ admin thấy) kèm badge số truyện
+/// chờ duyệt — nạp `GET /admin/stats`, quay về màn Kiểm duyệt thì đếm lại.
+class _ModerationMenuTile extends StatefulWidget {
+  const _ModerationMenuTile({this.api});
+
+  final ApiService? api;
+
+  @override
+  State<_ModerationMenuTile> createState() => _ModerationMenuTileState();
+}
+
+class _ModerationMenuTileState extends State<_ModerationMenuTile> {
+  late final ApiService _api = widget.api ?? ApiService();
+
+  int? _pending; // null = đang nạp / không tải được (ẩn badge)
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      _api.setToken(AuthService.instance.session?.token);
+      final AdminStats stats = await _api.fetchAdminStats();
+      if (mounted) setState(() => _pending = stats.pending);
+    } catch (_) {
+      // Không tải được badge thì mục menu vẫn mở được.
+      if (mounted) setState(() => _pending = 0);
+    }
+  }
+
+  Future<void> _open() async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(builder: (_) => ModerationScreen(api: _api)),
+    );
+    if (mounted) _load(); // duyệt/từ chối xong → badge cập nhật
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme scheme = theme.colorScheme;
+    final int count = _pending ?? 0;
+
+    return ListTile(
+      leading: Icon(Icons.fact_check_outlined, color: scheme.primary),
+      title: const Text('Kiểm duyệt truyện'),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          if (count > 0)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: scheme.error.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '$count',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: scheme.error,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          const SizedBox(width: 4),
+          const Icon(Icons.chevron_right_rounded),
+        ],
+      ),
+      onTap: _open,
     );
   }
 }

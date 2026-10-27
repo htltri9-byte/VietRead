@@ -305,9 +305,9 @@ class _StoryFormScreenState extends State<StoryFormScreen> {
           // ---------- Lưu như nháp ----------
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Lưu làm nháp'),
-            subtitle: Text(
-              'Nháp chỉ mình bạn thấy; tắt cờ này để đăng công khai.',
+            title: const Text('Lưu làm nháp'),              subtitle: Text(
+                'Nháp chỉ mình bạn thấy; bấm "Gửi duyệt" ở danh sách truyện '
+                'để gửi Admin xét duyệt.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),

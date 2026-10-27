@@ -14,6 +14,11 @@ class Story {
     this.rating = 0,
     this.chapterCount = 0,
     this.isDraft = false,
+    this.moderationStatus = 'draft',
+    this.rejectReason,
+    this.needsRecheck = false,
+    this.submittedAt,
+    this.scanStatus,
     required this.updatedAt,
   });
 
@@ -42,7 +47,38 @@ class Story {
   final double rating;
   final int chapterCount;
   final bool isDraft;
+
+  // ---------------- Kiểm duyệt trước khi công khai (thêm mới) ----------------
+
+  /// Trạng thái kiểm duyệt: `draft` | `pending` | `approved` | `rejected`.
+  /// Truyện chỉ hiện công khai khi `approved`.
+  final String moderationStatus;
+
+  /// Lý do Admin từ chối (chỉ có khi `rejected`).
+  final String? rejectReason;
+
+  /// Truyện đã duyệt nhưng chủ truyện sửa/thêm chương → Admin nên xem lại.
+  final bool needsRecheck;
+
+  /// Lúc chủ truyện gửi duyệt (null khi chưa gửi lần nào).
+  final DateTime? submittedAt;
+
+  /// Kết quả quét tự động (`none`/`clean`/`flagged`/`error`) —
+  /// giai đoạn này backend chưa chạy quét nên thường là `null` (ẩn khối quét).
+  final String? scanStatus;
+
   final DateTime updatedAt;
+
+  /// Truyện đã được duyệt (= đang hiển thị công khai).
+  bool get isApproved => moderationStatus == 'approved';
+
+  /// Nhãn tiếng Việt của trạng thái kiểm duyệt (chip trên thẻ).
+  String get moderationLabel => switch (moderationStatus) {
+    'approved' => 'Đã duyệt',
+    'pending' => 'Chờ duyệt',
+    'rejected' => 'Bị từ chối',
+    _ => 'Nháp',
+  };
 
   /// Đang ra hay hoàn thành (để vẽ chip trạng thái).
   bool get isCompleted => status == 'completed';
@@ -87,6 +123,15 @@ class Story {
     rating: (json['rating'] as num?)?.toDouble() ?? 0,
     chapterCount: (json['chapterCount'] as num?)?.toInt() ?? 0,
     isDraft: json['isDraft'] as bool? ?? false,
+    // Trạng thái kiểm duyệt — backend cũ chưa có thì suy ra từ isDraft.
+    moderationStatus:
+        json['moderationStatus'] as String? ??
+        ((json['isDraft'] as bool? ?? false) ? 'draft' : 'approved'),
+    rejectReason: _cleanNullable(json['rejectReason'] as String?),
+    needsRecheck: json['needsRecheck'] as bool? ?? false,
+    submittedAt:
+        DateTime.tryParse(json['submittedAt'] as String? ?? ''),
+    scanStatus: _cleanNullable(json['scanStatus'] as String?),
     // Chuỗi ISO từ backend (ví dụ 2026-10-06T10:47:48.657115)
     updatedAt:
         DateTime.tryParse(json['updatedAt'] as String? ?? '') ??
@@ -107,6 +152,11 @@ class Story {
     'rating': rating,
     'chapterCount': chapterCount,
     'isDraft': isDraft,
+    'moderationStatus': moderationStatus,
+    'rejectReason': rejectReason,
+    'needsRecheck': needsRecheck,
+    'submittedAt': submittedAt?.toIso8601String(),
+    'scanStatus': scanStatus,
     'updatedAt': updatedAt.toIso8601String(),
   };
 

@@ -56,6 +56,18 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  /// Mở menu "Tuỳ chọn" của dòng truyện có tiêu đề [title]
+  /// (dùng cho các test đổi trạng thái của một truyện cụ thể).
+  Future<void> openMenuOf(WidgetTester tester, String title) async {
+    final Finder tile = find
+        .ancestor(of: find.text(title), matching: find.byType(ListTile))
+        .first;
+    await tester.tap(
+      find.descendant(of: tile, matching: find.byTooltip('Tuỳ chọn')),
+    );
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('chưa đăng nhập → lời mời đăng nhập mở AuthScreen', (
     WidgetTester tester,
   ) async {
@@ -163,7 +175,7 @@ void main() {
     await openFirstMenu(tester);
     expect(find.text('Sửa thông tin'), findsOneWidget);
     expect(find.text('Quản lý chương'), findsOneWidget);
-    expect(find.text('Đăng công khai'), findsOneWidget);
+    expect(find.text('Gửi duyệt'), findsOneWidget);
     expect(find.text('Xoá truyện'), findsOneWidget);
 
     await tester.tap(find.text('Quản lý chương'));
@@ -233,23 +245,133 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('menu "Đăng công khai" → mất chip "Nháp"', (
+  testWidgets('menu "Gửi duyệt" → hộp thoại quyền → chip "Chờ duyệt"', (
+    WidgetTester tester,
+  ) async {
+    final MockApiService mock = api();
+    final AuthService auth = AuthService.resetForTest(api: mock);
+    await auth.login('tacgia@vietread.vn', 'VietRead@123');
+
+    // Dùng truyện seed (đã có mô tả / thể loại / chương) để đạt điều kiện
+    // gửi duyệt; đưa về nháp như thể tác giả vừa mới soạn xong.
+    MockApiService.setModerationForTest(1, 'draft');
+    await pumpUpload(tester, mock);
+    expect(find.text('Nháp'), findsOneWidget);
+
+    await openMenuOf(tester, 'Kiếm Sư Vọng Tường');
+    await tester.tap(find.text('Gửi duyệt'));
+    await tester.pumpAndSettle();
+
+    // Hộp thoại xác nhận quyền đăng — chưa tích thì nút Gửi duyệt bị khóa.
+    expect(find.text('Gửi truyện đi duyệt'), findsOneWidget);
+    expect(
+      find.byType(CheckboxListTile),
+      findsOneWidget,
+    );
+    FilledButton send =
+        tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Gửi duyệt'));
+    expect(send.onPressed, isNull); // chưa xác nhận quyền
+
+    await tester.tap(find.byType(CheckboxListTile));
+    await tester.pumpAndSettle();
+    send =
+        tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Gửi duyệt'));
+    expect(send.onPressed, isNotNull);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Gửi duyệt'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Đã gửi'), findsOneWidget);
+    expect(find.text('Nháp'), findsNothing); // đã chuyển sang chờ duyệt
+    expect(find.text('Chờ duyệt'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('truyện thiếu điều kiện → lỗi 400 ngay khi gửi duyệt', (
     WidgetTester tester,
   ) async {
     final MockApiService mock = api();
     final AuthService auth = AuthService.resetForTest(api: mock);
     await auth.login('tacgia@vietread.vn', 'VietRead@123');
     await pumpUpload(tester, mock);
-    await createStory(tester, 'Truyện Lên Sáng');
-    expect(find.text('Nháp'), findsOneWidget);
+    // Truyện mới tạo chưa có mô tả / thể loại / chương → 400 kèm lý do.
+    await createStory(tester, 'Truyện Chưa Đủ Điều Kiện');
 
-    await openFirstMenu(tester);
-    await tester.tap(find.text('Đăng công khai'));
+    await openMenuOf(tester, 'Truyện Chưa Đủ Điều Kiện');
+    await tester.tap(find.text('Gửi duyệt'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(CheckboxListTile));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Gửi duyệt'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Đã đăng "Truyện Lên Sáng" công khai.'), findsOneWidget);
-    expect(find.text('Truyện Lên Sáng'), findsOneWidget);
-    expect(find.text('Nháp'), findsNothing); // đã công khai
+    expect(find.textContaining('Chưa đủ điều kiện gửi duyệt'), findsOneWidget);
+    expect(find.text('Nháp'), findsOneWidget); // vẫn là nháp
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('truyện bị từ chối → hiện lý do + menu "Gửi lại"', (
+    WidgetTester tester,
+  ) async {
+    final MockApiService mock = api();
+    final AuthService auth = AuthService.resetForTest(api: mock);
+    await auth.login('tacgia@vietread.vn', 'VietRead@123');
+    MockApiService.setModerationForTest(
+      1,
+      'rejected',
+      rejectReason: 'Mô tả còn quá ngắn, vui lòng bổ sung.',
+    );
+    await pumpUpload(tester, mock);
+
+    expect(find.text('Bị từ chối'), findsOneWidget);
+    expect(
+      find.textContaining('Lý do: Mô tả còn quá ngắn'),
+      findsOneWidget,
+    );
+
+    await openMenuOf(tester, 'Kiếm Sư Vọng Tường');
+    expect(find.text('Gửi lại'), findsOneWidget);
+    expect(find.text('Đăng công khai'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('truyện đã duyệt → menu "Gỡ xuống" → về nháp', (
+    WidgetTester tester,
+  ) async {
+    final MockApiService mock = api();
+    final AuthService auth = AuthService.resetForTest(api: mock);
+    await auth.login('tacgia@vietread.vn', 'VietRead@123');
+    await pumpUpload(tester, mock);
+    expect(find.text('Đã duyệt'), findsWidgets); // seed đều đã duyệt
+
+    await openFirstMenu(tester);
+    await tester.tap(find.text('Gỡ xuống'));
+    await tester.pumpAndSettle();
+
+    // Dialog xác nhận
+    expect(find.widgetWithText(FilledButton, 'Gỡ xuống'), findsWidgets);
+    await tester.tap(find.widgetWithText(FilledButton, 'Gỡ xuống').last);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Đã gỡ'), findsOneWidget);
+    expect(find.text('Nháp'), findsOneWidget); // dòng đầu về nháp
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('truyện đang chờ duyệt → menu "Đang chờ duyệt"', (
+    WidgetTester tester,
+  ) async {
+    final MockApiService mock = api();
+    final AuthService auth = AuthService.resetForTest(api: mock);
+    await auth.login('tacgia@vietread.vn', 'VietRead@123');
+    MockApiService.setModerationForTest(1, 'pending');
+    await pumpUpload(tester, mock);
+
+    expect(find.text('Chờ duyệt'), findsOneWidget);
+    await openMenuOf(tester, 'Kiếm Sư Vọng Tường');
+    expect(find.text('Đang chờ duyệt'), findsOneWidget);
+    expect(find.text('Gửi duyệt'), findsNothing);
+    expect(find.text('Gỡ xuống'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

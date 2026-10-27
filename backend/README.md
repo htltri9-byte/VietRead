@@ -100,6 +100,26 @@ màn Quy tắc chỉ hiển thị nghĩa, không lộ khóa chữ Trung;
 `DELETE /me/mark-rules/{ruleId}` xoá 1 quy tắc. Sửa từ điển xong gọi
 `POST /dictionary/names/reload` để meanings mới nhất, không cần restart.
 
+**Migration kiểm duyệt truyện (idempotent, chạy lại an toàn):**
+
+```bash
+sqlcmd -S localhost -E -C -b -f 65001 -i database/migrate_moderation.sql
+```
+
+- `Users.Role NVARCHAR(20) NOT NULL DEFAULT 'user'` (`user` | `admin`).
+- `Stories`: `ModerationStatus` (`draft|pending|approved|rejected`),
+  `RejectReason`, `SubmittedAt`, `ReviewedAt`, `ReviewedBy` (FK `Users`),
+  `NeedsRecheck BIT DEFAULT 0`, `ScanStatus` (`none|clean|flagged|error`),
+  `ScanSummary NVARCHAR(MAX)` (JSON — **chỉ tạo cột, chưa có logic quét**).
+- Bảng `ModerationLog(Id, StoryId, AdminId, Action, Reason, CreatedAt)` ghi
+  mỗi lần duyệt/từ chối/gỡ.
+- **Chuyển dữ liệu cũ**: `IsDraft = 1` → `draft`; `IsDraft = 0` → `approved`
+  (truyện đang công khai vẫn hiện sau migration).
+- **Đồng bộ `IsDraft`**: `IsDraft = 0` ⇔ `ModerationStatus = 'approved'`,
+  mọi endpoint sửa trạng thái đều đặt cả hai cột trong cùng một transaction
+  (`set_status()` trong `app/moderation.py`) — cột cũ giữ lại để client cũ
+  không vỡ.
+
 Làm lại từ đầu (chỉ khi chắc chắn, sẽ xoá toàn bộ dữ liệu):
 
 ```bash
@@ -159,7 +179,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 |---|---|---|---|---|
 | POST | `/auth/register` | `{ name, email, password }` | `200 { token, user }` | `400` email đã dùng / dữ liệu sai |
 | POST | `/auth/login` | `{ email, password }` | `200 { token, user }` | `401` sai thông tin |
-| GET | `/auth/me` | header `Authorization: Bearer <token>` | `200 { id, name, email, avatarUrl }` | `401` thiếu/sai token |
+| GET | `/auth/me` | header `Authorization: Bearer <token>` | `200 { id, name, email, avatarUrl, role }` | `401` thiếu/sai token |
 
 Mọi lỗi trả về dạng `{ "message": "..." }` (xem [Phần B của đề bài](../VietRead_prompt.md)).
 Email được chuẩn hoá: bỏ khoảng trắng + viết thường; mật khẩu băm bằng bcrypt (`$2b$12$...`),
@@ -195,6 +215,11 @@ Ngoài ra có thể test trực tiếp trên http://127.0.0.1:8000/docs (nhấn 
 |---|---|---|
 | `tacgia@vietread.vn` | `VietRead@123` | tác giả, có 4 truyện |
 | `docgia@vietread.vn` | `VietRead@123` | độc giả, có theo dõi + bình luận |
+| `admin@vietread.vn` | (mẫu trong `seed.sql`) | **admin** — dùng cho màn Kiểm duyệt |
+
+> Tài khoản admin trong `seed.sql` chỉ phục vụ môi trường phát triển:
+> **phải đổi mật khẩu (hoặc tạo lại bằng `tools/create_admin.py`) trước khi
+> mở backend ra ngoài mạng.** Tài khoản admin thật nên tạo bằng script ở mục 9.
 
 ---
 
@@ -356,3 +381,85 @@ backend/
 ```
 
 **Tiếp theo (Bước 3 của Lộ trình):** Flutter — khởi tạo project, theme sáng/tối, floating bottom nav, điều hướng.
+
+---
+
+## 9. Kiểm duyệt truyện trước khi công khai (Admin)
+
+Truyện chỉ hiện công khai khi `Stories.ModerationStatus = 'approved'`.
+
+### Trạng thái & chuyển trạng thái
+
+| Từ | Đến | Ai làm | Endpoint |
+|---|---|---|---|
+| `draft` | `pending` | chủ truyện | `POST /stories/{id}/submit` |
+| `pending` | `approved` | admin | `POST /admin/stories/{id}/approve` |
+| `pending` | `rejected` | admin | `POST /admin/stories/{id}/reject` |
+| `rejected` | `pending` | chủ truyện | `POST /stories/{id}/submit` |
+| `approved` | `draft` | chủ truyện / admin | `POST /stories/{id}/unpublish` |
+| `approved` | `rejected` | admin (bắt buộc lý do) | `POST /admin/stories/{id}/reject` |
+
+Mọi chuyển khác trả **409**; duyệt/từ chối kiểm tra trạng thái **trong cùng
+transaction** nên hai Admin thao tác cùng lúc an toàn (người sau nhận 409).
+`IsDraft` luôn đồng bộ (`approved` ⇔ `IsDraft = 0`) — xem mục 2.
+
+### Endpoint chủ truyện
+
+| Method | Path | Body / ghi chú |
+|---|---|---|
+| POST | `/stories/{id}/submit` | `{ "confirmRights": true }` — thiếu xác nhận hoặc thiếu tên/mô tả/thể loại/≥1 chương → **400** kèm lý do; chuyển `pending`, ghi `SubmittedAt`, xóa `RejectReason` |
+| POST | `/stories/{id}/unpublish` | `approved → draft` (truyện biến mất khỏi app công khai) |
+| POST | `/stories/{id}/chapters...` (thêm/sửa/xoá) | truyện `approved` → đặt `NeedsRecheck = 1` (vẫn hiển thị, Admin nên xem lại) |
+| PUT | `/stories/{id}` | client cũ gửi `isDraft=false` ("Đăng công khai" cũ) → **400** hướng dẫn dùng `submit` (response vẫn `{message}` nên app cũ không vỡ); `isDraft=true` trên truyện approved = gỡ xuống |
+
+### Endpoint Admin (cần `role = admin`; chưa đăng nhập 401, người thường 403)
+
+| Method | Path | Ghi chú |
+|---|---|---|
+| GET | `/admin/stories?status=pending\|approved\|rejected\|draft\|recheck\|all&q=&page=&pageSize=` | tên, tác giả, số chương, `SubmittedAt`, `ModerationStatus`, `NeedsRecheck`, `ScanStatus`; mặc định chờ duyệt cũ nhất trước |
+| GET | `/admin/stories/{id}` | thông tin + mô tả + thể loại + danh sách chương (xem trước khi chưa công khai) |
+| GET | `/admin/chapters/{chapterId}` | nội dung **đã resolve marker** (không dấu `{}`) + `OriginalContent` |
+| POST | `/admin/stories/{id}/approve` | `pending` hoặc `approved`+`NeedsRecheck` → `approved`; ghi `ReviewedAt`/`ReviewedBy`, xóa `NeedsRecheck`, ghi `ModerationLog` |
+| POST | `/admin/stories/{id}/reject` | `{ "reason": "…" }` bắt buộc 5–1000 ký tự (thiếu → 400) — dùng cho cả gỡ truyện đã duyệt |
+| GET | `/admin/stats` | số truyện theo từng trạng thái (badge "Chờ duyệt (N)") |
+
+### Endpoint người đọc đã rà — chỉ trả truyện `approved`
+
+Điều kiện dùng chung là `moderation.can_view()` / bộ lọc
+`Story.moderation_status == 'approved'`:
+
+- `GET /stories` — Khám phá, tìm kiếm `query`, lọc thể loại/trạng thái, sắp xếp,
+  phân trang, đề cử (cùng 1 câu lệnh lọc).
+- `GET /stories/{id}` — chi tiết; chưa duyệt → **404** với người ngoài, chủ truyện
+  và Admin vẫn xem được.
+- `GET /stories/{id}/chapters` — danh sách chương.
+- `GET /chapters/{id}` — nội dung chương (kể cả khi tải offline).
+- `GET|POST /stories/{id}/comments` — bình luận.
+- `POST /follows`, `DELETE /follows/{storyId}`, `GET /me/follows` — theo dõi
+  (danh sách lọc riêng những truyện approved).
+- `GET /genres` — chỉ danh mục thể loại, không chứa truyện.
+- `GET /me/stories` — trả đủ 4 trạng thái (chỉ chủ truyện), KHÔNG lọc để tác giả quản lý.
+- Lịch sử đọc / tiến độ / tủ sách cục bộ: lưu ở máy, không qua endpoint.
+
+### Tạo tài khoản Admin
+
+```bash
+cd backend
+# nhận email/mật khẩu từ tham số hoặc biến môi trường (không hardcode):
+./.venv/Scripts/python.exe tools/create_admin.py --email admin@vietread.vn --password '<MAT_KHAU_MANH>'
+# hoặc: ADMIN_EMAIL=... ADMIN_PASSWORD=... ./.venv/Scripts/python.exe tools/create_admin.py
+```
+
+Script băm mật khẩu đúng cách hiện có của project (bcrypt) và đặt
+`Users.Role = 'admin'`; chạy lại với email đã có → báo đã tồn tại (không ghi đè).
+
+### Test tay nhanh
+
+```bash
+# migration (idempotent)
+sqlcmd -S localhost -E -C -b -f 65001 -i database/migrate_moderation.sql
+# toàn bộ test API (gồm kiểm duyệt: 409, 403, 400, 404, NeedsRecheck, 2 admin...)
+cd backend && PYTHONUTF8=1 ./.venv/Scripts/python.exe test_api.py   # 333/333
+# restart backend
+.venv/Scripts/python.exe -m uvicorn app.main:app --port 8000
+```

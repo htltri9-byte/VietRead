@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from .. import alternatives, security
 from ..database import get_db
+from ..moderation import mark_needs_recheck
 from ..models import Chapter, ChapterRevision, Comment, User
 from ..schemas import (
     ChapterCreate,
@@ -208,6 +209,7 @@ def create_chapter(
     )
     db.add(chapter)
     story.updated_at = utc_now()  # để mục "Mới cập nhật" phản ánh đúng
+    mark_needs_recheck(story)     # approved → Admin nên xem lại (các trạng thái khác giữ nguyên)
     db.commit()
     db.refresh(chapter)
     return _chapter_out(chapter)
@@ -254,6 +256,7 @@ def update_chapter(
 
     chapter.updated_at = utc_now()
     story.updated_at = utc_now()
+    mark_needs_recheck(story)
     db.commit()
     db.refresh(chapter)
     return _chapter_out(chapter)
@@ -276,5 +279,6 @@ def delete_chapter(
     db.execute(sa_delete(ChapterRevision).where(ChapterRevision.chapter_id == chapter.id))
     db.delete(chapter)
     story.updated_at = utc_now()
+    mark_needs_recheck(story)
     db.commit()
     return {"message": "Đã xoá chương"}
