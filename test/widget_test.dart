@@ -20,14 +20,11 @@ void main() {
   Finder navLabel(String label) =>
       find.descendant(of: find.byType(FloatingNav), matching: find.text(label));
 
-  test('chủ đề "Mực & Giấy" đúng màu và font theo Phần A2', () {
+  test('chủ đề giao diện đúng màu và font theo AppTheme', () {
     final ThemeData light = AppTheme.light();
-    expect(
-      light.scaffoldBackgroundColor,
-      const Color(0xFFFAF6EE),
-    ); // nền kem giấy
-    expect(light.colorScheme.primary, const Color(0xFF1F6F6B)); // xanh ngọc đậm
-    expect(light.colorScheme.secondary, const Color(0xFFFF6B57)); // san hô
+    expect(light.scaffoldBackgroundColor, AppColors.paper);
+    expect(light.colorScheme.primary, AppColors.primary);
+    expect(light.colorScheme.secondary, AppColors.accent);
     expect(
       light.textTheme.bodyMedium?.fontFamily,
       AppFonts.ui,
@@ -35,8 +32,8 @@ void main() {
     expect(light.cardTheme.shape, isA<RoundedRectangleBorder>()); // bo góc 16
 
     final ThemeData dark = AppTheme.dark();
-    expect(dark.scaffoldBackgroundColor, const Color(0xFF14181A)); // nền tối
-    expect(dark.colorScheme.secondary, const Color(0xFFFF6B57)); // giữ màu nhấn
+    expect(dark.scaffoldBackgroundColor, AppColors.night);
+    expect(dark.colorScheme.secondary, AppColors.accent);
     expect(dark.textTheme.bodyMedium?.fontFamily, AppFonts.ui);
   });
 
