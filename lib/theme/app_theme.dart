@@ -1,30 +1,29 @@
 import 'package:flutter/material.dart';
 
-/// Bảng màu "Mực & Giấy" — ánh xạ đúng theo Phần A2 của đề bài.
+/// Bảng màu Indigo & Modern Slate — Xanh hiện đại, tươi sáng và sắc nét.
 class AppColors {
   const AppColors._();
 
-  // ----- Chủ đề sáng (nền kem giấy) -----
-  static const Color paper = Color(0xFFFAF6EE); // nền kem giấy
-  static const Color card = Color(0xFFFFFDF6); // card trắng ngà
-  static const Color ink = Color(0xFF23201C); // màu chữ
-  static const Color inkMuted = Color(0xFF6F6A5E); // chữ phụ
-  static const Color border = Color(0xFFE7E0D2); // viền mảnh
+  // ----- Chủ đề sáng (nền trắng mát & xám nhạt) -----
+  static const Color paper = Color(0xFFF8FAFC); // nền slate-50 mát mẻ
+  static const Color card = Color(0xFFFFFFFF); // card trắng tinh tế
+  static const Color ink = Color(0xFF0F172A); // màu chữ slate-900 sắc nét
+  static const Color inkMuted = Color(0xFF64748B); // chữ phụ slate-500
+  static const Color border = Color(0xFFE2E8F0); // viền mảnh slate-200
 
-  // ----- Chủ đề tối -----
-  static const Color night = Color(0xFF14181A); // nền tối
-  static const Color cardNight = Color(0xFF1C2225);
-  static const Color inkNight = Color(0xFFF1EEE7);
-  static const Color inkMutedNight = Color(0xFF9BA4A6);
-  static const Color borderNight = Color(0xFF2C3336);
+  // ----- Chủ đề tối (Midnight Blue sâu thẳm) -----
+  static const Color night = Color(0xFF0B0F19); // nền xanh đêm sâu
+  static const Color cardNight = Color(0xFF111827); // card midnight
+  static const Color inkNight = Color(0xFFF8FAFC); // chữ sáng
+  static const Color inkMutedNight = Color(0xFF94A3B8); // chữ phụ sáng dịu
+  static const Color borderNight = Color(0xFF1E293B); // viền đêm slate-800
 
   // ----- Dùng chung cho cả 2 chế độ -----
-  static const Color primary = Color(0xFF1F6F6B); // xanh ngọc đậm
+  static const Color primary = Color(0xFF1D4ED8); // xanh Indigo hiện đại
 
-  /// Bản sáng của xanh ngọc — dùng trên nền tối (thanh điều hướng, nhấn
-  /// nhạt…) để chữ nhỏ vẫn đạt tương phản dễ đọc.
-  static const Color primarySoft = Color(0xFF57BFB6);
-  static const Color accent = Color(0xFFFF6B57); // san hô
+  /// Bản sáng của xanh Indigo — dùng trên nền tối để chữ nhỏ/icon đạt tương phản cao.
+  static const Color primarySoft = Color(0xFF60A5FA);
+  static const Color accent = Color(0xFFF59E0B); // hổ phách ấm (Amber)
   static const Color white = Color(0xFFFFFFFF);
 
   // ----- Nền đọc sepia (A3.5: sáng / tối / sepia) -----
