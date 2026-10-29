@@ -9,7 +9,7 @@ class ApiConfig {
   ///
   /// **Bước 6** đã chuyển sang API thật (`false`) — muốn chạy không cần backend
   /// thì đổi lại thành `true`, không phải sửa code ở nơi khác.
-  static const bool useMock = true;
+  static const bool useMock = false;
 
   /// Địa chỉ backend.
   ///
