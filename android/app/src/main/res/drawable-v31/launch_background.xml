@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ (API 31): splash icon do hệ thống vẽ (windowSplashScreenAnimatedIcon),
+     windowBackground chỉ cần nền màu để không chớp trắng — giống flutter_native_splash. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/splash_background" />
+</layer-list>

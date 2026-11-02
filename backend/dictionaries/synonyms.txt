@@ -1,0 +1,45 @@
+# synonyms.txt — Danh sách ĐEN: khóa chỉ là ĐỒNG NGHĨA (các nghĩa cùng một ý),
+# KHÔNG bao giờ tạo marker ở mức Vừa — người đăng không cần chọn.
+#
+# Format: mỗi dòng MỘT khóa chữ Trung, UTF-8; dòng bắt đầu bằng # là chú thích.
+# Sửa file xong không cần restart (get_lists tự nạp lại) hoặc bấm
+# POST /dictionary/mark-lists/reload.
+#
+# Gốc các dòng dưới đây: đúng các ví dụ "từ đồng nghĩa không cần chọn" trong
+# chương Bảo vệ phí ({trận|tràng|cuộc|cơn|đợt|màn}, {mặt khác|...|khác},
+# {lưu manh|vô lại|côn đồ}, {tựa hồ|dường như|hình như}, ...).
+# File này thường TRỐNG — nội dung mặc định nằm ở synonyms.seed.txt (đóng gói
+# kèm repo, nạp tiếp khi file này không có khóa).
+
+# --- Lượng từ (trận/tràng/cuộc/cơn/đợt/màn) ---
+场
+
+# --- "mặt khác / những khác / cái khác / khác" ---
+其他
+
+# --- "lưu manh / vô lại / côn đồ" ---
+混混儿
+痞子
+泼皮
+
+# --- "tựa hồ / dường như / hình như" ---
+似乎
+彷似
+好像
+
+# --- "âm trầm / u ám / âm u" ---
+阴沉
+阴森
+
+# --- "thép ròng / thép tinh luyện" ---
+镔铁
+
+# --- "dáng người / vóc người / vóc dáng" ---
+身材
+个子
+
+# --- "sắc mặt / khí sắc / vẻ mặt" ---
+脸色
+
+# --- "trên người / trên mình / bên mình / trong người" ---
+身上
