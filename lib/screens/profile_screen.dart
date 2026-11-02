@@ -234,13 +234,7 @@ class _LoggedInBody extends StatelessWidget {
                 const Divider(height: 1),
                 _ModerationMenuTile(api: api),
               ],
-              const Divider(height: 1),
-              ListTile(
-                leading: Icon(Icons.tune_rounded, color: scheme.primary),
-                title: const Text('Cài đặt giao diện'),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () => onComingSoon('Cài đặt giao diện'),
-              ),
+             
             ],
           ),
         ),
